@@ -1,0 +1,96 @@
+/* IAgora design system: tokens and shared components (from the "IAgora Design System" project). */
+@import url("/static/fonts/fonts.css");
+
+:root {
+  /* Brand, sampled from the IAgora wordmark */
+  --blue-900: #161F5E; --blue-800: #22308F; --blue-700: #2939B4; --blue-600: #3045D1; --blue-500: #4557DA;
+  --blue-300: #8B97E5; --blue-100: #D6DBF7; --blue-50: #EEF0FC;
+  --pink-900: #8C1E63; --pink-700: #D62E96; --pink-600: #FF50BE; --pink-500: #FF6BC8; --pink-300: #FFA3DC;
+  --pink-100: #FFD9F0; --pink-50: #FFEEF8;
+  /* Neutrals */
+  --ink-900: #000000; --ink-800: #14141A; --ink-700: #2B2B33; --ink-500: #5C5C68; --ink-400: #8A8A95;
+  --ink-300: #C4C4CC; --ink-200: #E3E3E9; --ink-100: #F2F2F6; --white: #FFFFFF;
+  /* Semantic */
+  --surface-page: var(--white); --surface-card: var(--white); --surface-muted: var(--ink-100);
+  --surface-brand-soft: var(--blue-50); --surface-accent-soft: var(--pink-50);
+  --text-body: var(--ink-800); --text-muted: var(--ink-500); --text-brand: var(--blue-600); --text-accent: var(--pink-600);
+  --border-subtle: var(--ink-200); --border-strong: var(--ink-900);
+  --danger: #D62E2E;
+  --gradient-brand: linear-gradient(90deg, var(--pink-600) 0%, var(--blue-600) 100%);
+  /* Type */
+  --font-display: "Anton", "Impact", "Arial Narrow", sans-serif;
+  --font-body: "Heebo", "Helvetica Neue", Arial, sans-serif;
+  --text-eyebrow: 13px; --eyebrow-tracking: .18em;
+  /* Shape, depth, motion */
+  --radius-sm: 6px; --radius-md: 12px; --radius-lg: 20px; --radius-xl: 32px; --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(20, 20, 26, .08);
+  --shadow-md: 0 6px 20px rgba(20, 20, 26, .10);
+  --shadow-lg: 0 18px 48px rgba(20, 20, 26, .14);
+  --shadow-brand: 0 12px 32px rgba(48, 69, 209, .24);
+  --shadow-accent: 0 12px 32px rgba(255, 80, 190, .28);
+  --ease-out: cubic-bezier(.22, .61, .36, 1);
+  --dur-fast: 120ms; --dur-base: 220ms;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-page); color: var(--text-body); font: 400 16px/1.65 var(--font-body); }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--text-brand); }
+a:hover { color: var(--text-accent); }
+
+/* Wordmark: IA in pink, GORA in blue, Anton capitals */
+.ia-logo { font-family: var(--font-display); font-size: 26px; line-height: 1; letter-spacing: .005em; text-decoration: none; color: var(--blue-600); }
+.ia-logo b { font-weight: 400; color: var(--pink-600); }
+
+.ia-eyebrow { font: 600 var(--text-eyebrow)/1.3 var(--font-body); letter-spacing: var(--eyebrow-tracking); text-transform: uppercase; color: var(--text-accent); }
+.ia-display { font-family: var(--font-display); font-weight: 400; line-height: .95; letter-spacing: .005em; text-transform: uppercase; color: var(--text-brand); margin: 0; }
+.ia-heading { font-family: var(--font-display); font-weight: 400; line-height: 1.1; letter-spacing: .01em; text-transform: uppercase; margin: 0; }
+
+/* Buttons: pills, Anton capitals. Hover swaps colour, never opacity. Press scales to .97. */
+.ia-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 20px; border: 2px solid transparent; border-radius: var(--radius-pill);
+  font: 400 15px/1 var(--font-display); letter-spacing: .04em; text-transform: uppercase; text-decoration: none;
+  cursor: pointer; white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.ia-btn:active:not(:disabled) { transform: scale(.97); }
+.ia-btn:disabled { cursor: default; background: var(--ink-100); border-color: var(--ink-100); color: var(--ink-400); }
+.ia-btn--primary { background: var(--blue-600); color: var(--white); }
+.ia-btn--primary:hover:not(:disabled) { background: var(--pink-600); color: var(--white); }
+.ia-btn--accent { background: var(--pink-600); color: var(--white); }
+.ia-btn--accent:hover:not(:disabled) { background: var(--blue-600); color: var(--white); }
+.ia-btn--outline { background: var(--white); border-color: var(--ink-900); color: var(--ink-900); }
+.ia-btn--outline:hover:not(:disabled) { border-color: var(--pink-600); color: var(--pink-600); }
+.ia-btn--ghost { background: transparent; color: var(--ink-800); padding: 0 12px; }
+.ia-btn--ghost:hover:not(:disabled) { color: var(--pink-600); }
+.ia-btn--ghost:disabled { background: transparent; border-color: transparent; }
+.ia-btn--sm { min-height: 32px; padding: 0 14px; font-size: 13px; }
+
+/* Tags / chips: pill, outlined */
+.ia-tag {
+  display: inline-flex; align-items: center; min-height: 30px; padding: 0 12px; border: 2px solid var(--ink-900);
+  border-radius: var(--radius-pill); background: var(--white); color: var(--ink-900);
+  font: 500 13px/1 var(--font-body); cursor: pointer; transition: color var(--dur-fast), border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.ia-tag:hover { border-color: var(--pink-600); color: var(--pink-600); }
+.ia-tag[aria-pressed="true"] { background: var(--blue-600); border-color: var(--blue-600); color: var(--white); }
+
+/* Cards: elevated (white, radius 20, shadow) */
+.ia-card { background: var(--surface-card); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+
+/* Form fields: 2px border, blue focus with blue-50 halo */
+.ia-field { display: grid; gap: 6px; font: 600 13px/1.3 var(--font-body); color: var(--ink-800); }
+.ia-input, .ia-select, .ia-textarea {
+  width: 100%; border: 2px solid var(--ink-200); border-radius: var(--radius-md); background: var(--white);
+  padding: 9px 12px; font: 400 15px/1.4 var(--font-body); color: var(--ink-800); outline: 0;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.ia-textarea { resize: vertical; min-height: 64px; }
+.ia-input:focus, .ia-select:focus, .ia-textarea:focus { border-color: var(--blue-600); box-shadow: 0 0 0 4px var(--blue-50); }
+
+.ia-icon-btn { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--ink-800); font-size: 22px; line-height: 1; cursor: pointer; }
+.ia-icon-btn:hover { background: var(--pink-50); color: var(--pink-600); }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+[hidden] { display: none !important; }

@@ -1,0 +1,10 @@
+This Stability AI Model is licensed under the Stability AI Community License, Copyright © Stability AI Ltd. All Rights Reserved.
+Powered by Stability AI.
+
+Gemma is provided under and subject to the Gemma Terms of Use found at ai.google.dev/gemma/terms
+
+Model used by this site: Stable Audio 3.0 Small Music (stabilityai/stable-audio-3-small-music), in the 4-bit ONNX
+conversion published by lsb (huggingface.co/lsb/stable-audio-3-small-music-onnx). The weights are downloaded by the
+visitor's browser from Hugging Face; this repository does not redistribute or modify them.
+
+Full license texts: licences/STABILITY_AI_COMMUNITY_LICENSE.md and licences/GEMMA_TERMS_OF_USE.md.

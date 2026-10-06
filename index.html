@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#FFFFFF">
+  <meta name="description" content="Créez votre instru avec une IA de musique qui tourne directement sur votre ordinateur.">
+  <title>Atelier instru · IAgora</title>
+  <link rel="stylesheet" href="/static/iagora.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a class="ia-logo" href="/" aria-label="IAgora, atelier instru"><b>IA</b>GORA</a>
+      <span class="ia-eyebrow">Atelier instru</span>
+    </div>
+    <div class="header-actions">
+      <button id="aboutButton" class="ia-btn ia-btn--ghost ia-btn--sm" type="button">À propos</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <span class="ia-eyebrow">L'IA par tous et pour tous /</span>
+      <h1 class="ia-display">Créez votre instru.</h1>
+      <p class="lead">Choisissez un style, une ambiance, des instruments et un tempo : l'IA compose une instru originale
+        de 10 secondes à 2 minutes. Le modèle tourne <strong>sur cet ordinateur</strong>, rien n'est envoyé en ligne.</p>
+    </section>
+
+    <section id="engineCard" class="engine ia-card" aria-live="polite">
+      <div class="engine-text">
+        <span class="section-label">Le modèle d'IA</span>
+        <p id="engineLabel">Vérification de l'ordinateur…</p>
+      </div>
+      <div class="engine-actions">
+        <button id="loadButton" class="ia-btn ia-btn--primary" type="button" hidden>Télécharger le modèle (680 Mo)</button>
+      </div>
+      <div id="engineBar" class="progress" hidden><span></span></div>
+    </section>
+
+    <div class="workspace">
+      <form id="composer" class="composer ia-card" autocomplete="off">
+        <div class="step">
+          <div class="step-head">
+            <span class="step-number">1</span>
+            <h2 class="ia-heading">Le style</h2>
+          </div>
+          <div id="styles" class="chips" role="group" aria-label="Style"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head">
+            <span class="step-number">2</span>
+            <h2 class="ia-heading">L'ambiance</h2>
+            <span class="step-hint">jusqu'à 3</span>
+          </div>
+          <div id="moods" class="chips" role="group" aria-label="Ambiance"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head">
+            <span class="step-number">3</span>
+            <h2 class="ia-heading">Les instruments</h2>
+            <span class="step-hint">jusqu'à 5</span>
+          </div>
+          <div id="instruments" class="chips" role="group" aria-label="Instruments"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head">
+            <span class="step-number">4</span>
+            <h2 class="ia-heading">Tempo, tonalité, forme</h2>
+          </div>
+          <div class="settings">
+            <label class="ia-field">
+              <span>Tempo : <output id="bpmValue">90</output> BPM <span id="bpmFeel" class="muted"></span></span>
+              <input id="bpm" class="range" type="range" min="60" max="180" step="1" value="90">
+            </label>
+            <label class="ia-field">
+              <span>Tonalité</span>
+              <select id="key" class="ia-select"></select>
+            </label>
+            <label class="ia-field">
+              <span>Forme</span>
+              <select id="form" class="ia-select"></select>
+            </label>
+            <label class="ia-field">
+              <span>Durée : <output id="secondsValue">30 s</output></span>
+              <input id="seconds" class="range" type="range" min="10" max="120" step="5" value="30">
+            </label>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-head">
+            <span class="step-number">5</span>
+            <h2 class="ia-heading">Vos précisions</h2>
+            <span class="step-hint">facultatif, en français</span>
+          </div>
+          <label class="ia-field">
+            <span class="sr-only">Précisions en français</span>
+            <textarea id="extra" class="ia-textarea" rows="2" maxlength="300"
+              placeholder="Par exemple : un solo de guitare au milieu, une ambiance de nuit en ville"></textarea>
+          </label>
+          <p id="extraStatus" class="field-note" hidden></p>
+        </div>
+      </form>
+
+      <aside class="side">
+        <section class="prompt-card ia-card">
+          <div class="prompt-head">
+            <h2 class="ia-heading">Le prompt</h2>
+            <span class="badge">en anglais</span>
+          </div>
+          <p class="field-note">Le modèle a appris avec des descriptions en anglais : c'est ce texte qu'il reçoit.
+            Il se remplit tout seul avec vos choix, et vous pouvez aussi l'écrire ou le modifier vous-même, en anglais.</p>
+          <label class="ia-field">
+            <span class="sr-only">Prompt en anglais</span>
+            <textarea id="prompt" class="ia-textarea prompt-text" rows="4" lang="en" spellcheck="false"></textarea>
+          </label>
+          <div id="manualBar" class="manual-bar" hidden>
+            <span>Prompt modifié à la main : vos choix ne le changent plus.</span>
+            <button id="rebuildButton" class="ia-btn ia-btn--ghost ia-btn--sm" type="button">Revenir à mes choix</button>
+          </div>
+          <div class="meaning">
+            <span class="section-label">Ce que ça veut dire</span>
+            <p id="meaning" lang="fr"></p>
+            <button id="translateButton" class="ia-btn ia-btn--outline ia-btn--sm" type="button" hidden>Traduire en français</button>
+          </div>
+          <div class="prompt-actions">
+            <button id="copyButton" class="ia-btn ia-btn--ghost ia-btn--sm" type="button">Copier le prompt</button>
+            <button id="surpriseButton" class="ia-btn ia-btn--ghost ia-btn--sm" type="button">Au hasard</button>
+          </div>
+          <button id="generateButton" class="ia-btn ia-btn--accent generate" type="button" disabled>Générer l'instru</button>
+          <div id="generation" class="generation" hidden>
+            <div class="progress"><span></span></div>
+            <div class="generation-row">
+              <span id="generationLabel"></span>
+              <button id="cancelButton" class="ia-btn ia-btn--ghost ia-btn--sm" type="button">Annuler</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="results">
+          <div class="results-head">
+            <h2 class="ia-heading">Vos instrus</h2>
+            <span id="resultsCount" class="muted"></span>
+          </div>
+          <p id="emptyResults" class="empty">Vos instrus apparaîtront ici. Elles ne sont gardées que tant que la page
+            reste ouverte : téléchargez celles que vous voulez garder.</p>
+          <ol id="results" class="result-list"></ol>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>Atelier instru IAgora · musique générée par Stable Audio 3.0 Small · <strong>Powered by Stability AI</strong></span>
+    <button class="ia-btn ia-btn--ghost ia-btn--sm" type="button" data-open-about>Crédits et licences</button>
+  </footer>
+
+  <template id="resultTemplate">
+    <li class="result ia-card">
+      <div class="result-head">
+        <span class="result-title ia-heading"></span>
+        <span class="result-meta muted"></span>
+      </div>
+      <canvas class="wave" height="56" aria-hidden="true"></canvas>
+      <audio controls preload="auto"></audio>
+      <p class="result-prompt" lang="en"></p>
+      <p class="result-meaning muted" lang="fr"></p>
+      <div class="result-actions">
+        <a class="ia-btn ia-btn--primary ia-btn--sm" data-download>Télécharger (WAV)</a>
+        <button class="ia-btn ia-btn--outline ia-btn--sm" type="button" data-variant>Une variante</button>
+        <button class="ia-btn ia-btn--ghost ia-btn--sm" type="button" data-reuse>Reprendre ce prompt</button>
+        <button class="ia-btn ia-btn--ghost ia-btn--sm" type="button" data-remove>Retirer</button>
+      </div>
+    </li>
+  </template>
+
+  <div id="aboutDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle" hidden>
+    <div class="modal-window ia-card about-window">
+      <div class="panel-heading">
+        <span id="aboutTitle" class="ia-heading">À propos de l'atelier.</span>
+        <button class="ia-icon-btn" type="button" data-close-about aria-label="Fermer">×</button>
+      </div>
+      <div class="about-body">
+        <p class="about-lead">Cet atelier utilise <strong>Stable Audio 3.0 Small</strong>, le modèle de musique ouvert de
+          <strong>Stability AI</strong>, le même que celui de la
+          <a href="https://huggingface.co/spaces/stabilityai/stable-audio-3" target="_blank" rel="noopener">démo en ligne de Stability AI</a>,
+          dans une version compressée pour fonctionner directement dans le navigateur.</p>
+        <p>Le modèle tourne sur cet ordinateur : vos descriptions et vos instrus ne sont envoyées à aucun service d'IA en ligne.
+          Il est téléchargé une seule fois (environ 680 Mo), puis gardé par le navigateur. Avec une carte graphique récente,
+          une instru de 30 secondes se calcule en quelques secondes ; sans carte graphique, comptez plusieurs minutes.</p>
+        <span class="section-label">Ce que vous pouvez faire des instrus</span>
+        <p>Selon la licence de Stability AI, les instrus générées vous appartiennent. Vous pouvez les utiliser, y compris
+          commercialement, tant que votre structure réalise moins d'un million de dollars de chiffre d'affaires par an ;
+          au-delà, il faut une licence entreprise de Stability AI. L'IA peut parfois produire des passages proches de
+          musiques existantes : écoutez avant de publier.</p>
+        <span class="section-label">Crédits</span>
+        <ul class="credits">
+          <li>★ <strong>Modèle de musique</strong> : Stable Audio 3.0 Small Music, Stability AI, sous
+            <a href="/licences/STABILITY_AI_COMMUNITY_LICENSE.md" target="_blank" rel="noopener">Stability AI Community License</a>.
+            « This Stability AI Model is licensed under the Stability AI Community License, Copyright © Stability AI Ltd. All Rights Reserved. »
+            <strong>Powered by Stability AI.</strong></li>
+          <li>★ <strong>Compréhension du texte</strong> : T5Gemma, Google, intégré au modèle et soumis aux
+            <a href="/licences/GEMMA_TERMS_OF_USE.md" target="_blank" rel="noopener">conditions d'utilisation de Gemma</a>.</li>
+          <li>★ <strong>Version pour le navigateur</strong> : conversion ONNX 4 bits de
+            <a href="https://huggingface.co/lsb/stable-audio-3-small-music-onnx" target="_blank" rel="noopener">lsb</a>,
+            poids non modifiés par l'atelier.</li>
+          <li>★ <strong>Traduction français ↔ anglais</strong> : opus-mt-fr-en et opus-mt-en-fr, Helsinki-NLP (université d'Helsinki),
+            licence CC BY 4.0, versions ONNX de Xenova.</li>
+          <li>★ <strong>Moteur dans le navigateur</strong> : ONNX Runtime Web (Microsoft, MIT), Transformers.js et Tokenizers.js
+            (Hugging Face, Apache 2.0).</li>
+          <li>★ <strong>Polices</strong> : Anton, Heebo (SIL Open Font License). Design system IAgora.</li>
+        </ul>
+        <span class="section-label">Comment cet atelier a été construit avec l'IA</span>
+        <p>L'équipe IAgora a conçu cet atelier en dialogue avec Claude, un assistant d'IA d'Anthropic, qui a écrit le code
+          et fait les tests à partir de nos demandes. Les idées, les choix et les relectures sont humains ; le modèle de
+          musique, lui, reste celui de Stability AI.</p>
+        <ul class="making-of">
+          <li>★ <strong>Faire tourner l'IA dans le navigateur</strong> : le modèle Small (459 millions de paramètres),
+            compressé en 4 bits, accéléré par la carte graphique quand c'est possible. Rien à installer.</li>
+          <li>★ <strong>Parler français</strong> : on compose avec des mots français, l'atelier écrit le prompt anglais
+            et explique en français ce qu'il dit ; les précisions libres sont traduites sur l'ordinateur.</li>
+          <li>★ <strong>Ne pas partir d'une page blanche</strong> : 24 styles avec leur tempo habituel, des ambiances,
+            des instruments, et un bouton « Au hasard ».</li>
+          <li>★ <strong>Retrouver une instru</strong> : chaque instru a sa graine ; « Une variante » garde le prompt et
+            change la graine.</li>
+        </ul>
+        <p class="about-foot">Atelier instru IAgora · code source :
+          <a href="https://github.com/mamatdunet/instru-iagora" target="_blank" rel="noopener">github.com/mamatdunet/instru-iagora</a></p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
