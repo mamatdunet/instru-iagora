@@ -74,7 +74,7 @@ function buildPrompt() {
   if (state.moods.length) parts.push(joinWith(state.moods.map(mood => mood.en), 'and'));
   if (state.instruments.length) parts.push(`with ${joinWith(state.instruments.map(item => item.en), 'and')}`);
   if (state.form.en) parts.push(state.form.en);
-  if (state.extraEn) parts.push(state.extraEn.replace(/[.\s]+$/, ''));
+  if (state.extraEn) parts.push(state.extraEn.replace(/[.\s]+$/, '').replace(/^[A-Z](?![A-Z])/, letter => letter.toLowerCase()));
   parts.push(`${state.bpm} BPM`);
   if (state.key.en) parts.push(state.key.en);
   return parts.join(', ');
@@ -93,7 +93,7 @@ function buildMeaning() {
   parts.push(`à ${state.bpm} battements par minute (tempo ${bpmFeel(state.bpm)})`);
   if (state.key.phrase) parts.push(state.key.phrase);
   let meaning = `${parts.join(', ')}.`;
-  if (state.extraFr.trim()) meaning += ` Et vos précisions : « ${state.extraFr.trim()} ».`;
+  if (state.extraFr.trim()) meaning += ` Et vos précisions : « ${state.extraFr.trim().replace(/[.\s]+$/, '')} ».`;
   return meaning;
 }
 
@@ -235,7 +235,7 @@ $('#translateButton').addEventListener('click', async () => {
   meaning.textContent = 'Traduction sur votre ordinateur…';
   try {
     const french = await translator.translate('en-fr', $('#prompt').value, (loaded, total) => { meaning.textContent = loadingNote(loaded, total); });
-    meaning.textContent = `Traduction automatique : « ${french} »`;
+    meaning.textContent = `Traduction automatique, approximative (le jargon musical est parfois traduit mot à mot) : « ${french} »`;
   } catch (error) {
     meaning.textContent = `La traduction n'a pas marché : ${error.message}`;
   } finally {
@@ -283,7 +283,7 @@ engine.addEventListener('message', ({ data }) => {
     engineLabel.textContent = backend === 'webgpu'
       ? 'Prêt, sur la carte graphique de cet ordinateur.'
       : 'Prêt, sur le processeur de cet ordinateur (pas de carte graphique utilisable ici) : c\'est plus lent, '
-        + 'comptez quelques minutes pour 30 secondes de musique.';
+        + 'comptez plusieurs minutes pour 30 secondes de musique.';
     updateGenerateButton();
   } else if (data.type === 'progress' && current?.id === data.id) {
     setProgress($('#generation .progress'), data.step / data.steps);
