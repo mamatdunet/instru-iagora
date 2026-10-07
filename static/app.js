@@ -284,6 +284,7 @@ function readAttempt() {
   }
 }
 
+let lastCrash = null; // kept for the diagnostic once the note is cleared
 const PART_NAMES = { dit: 'le compositeur', textEncoder: 'la lecture du texte', decoder: 'le décodeur audio', seconds: 'la durée' };
 const BACKEND_NAMES = { webgpu: 'la carte graphique', wasm: 'le processeur' };
 
@@ -304,6 +305,7 @@ function describeCrash(attempt, gpuInWorker) {
 engine.addEventListener('message', ({ data }) => {
   if (data.type === 'cache') {
     const crashed = readAttempt();
+    lastCrash = crashed;
     if (crashed) {
       engineLabel.textContent = describeCrash(crashed, data.gpu)
         + (crashed.phase === 'generation' ? ' Essayez une instru plus courte ou la vitesse « Rapide ».' : '');
@@ -362,6 +364,44 @@ engine.addEventListener('message', ({ data }) => {
     } else if (current?.id === data.id) {
       stopGeneration(data.message === 'annulé' ? null : `La génération a échoué : ${data.message}`);
     }
+  }
+});
+
+// --- Diagnostic, to send when the model does not start on a device --------------------------------
+
+let lastError = null;
+let diagnosticResolve = null;
+engine.addEventListener('message', ({ data }) => {
+  if (data.type === 'error' && data.id == null) lastError = data.message;
+  if (data.type === 'diagnostic') diagnosticResolve?.(data.report);
+});
+
+$('#diagnosticButton').addEventListener('click', async () => {
+  const button = $('#diagnosticButton');
+  const fromWorker = await Promise.race([
+    new Promise(resolve => {
+      diagnosticResolve = resolve;
+      engine.postMessage({ type: 'diagnose' });
+    }),
+    new Promise(resolve => setTimeout(() => resolve('le moteur ne répond pas (occupé ou planté)'), 5000)),
+  ]);
+  const text = JSON.stringify({
+    page: location.href,
+    navigateur: navigator.userAgent,
+    gpuInPage: Boolean(navigator.gpu),
+    memoire: navigator.deviceMemory ?? null,
+    coeurs: navigator.hardwareConcurrency ?? null,
+    tentative: readAttempt(),
+    plantagePrecedent: lastCrash,
+    derniereErreur: lastError,
+    bandeau: engineLabel.textContent,
+    moteur: fromWorker,
+  }, null, 1);
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(button, 'Copié !');
+  } catch {
+    window.prompt('Copiez ce diagnostic :', text);
   }
 });
 

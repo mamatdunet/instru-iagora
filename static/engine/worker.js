@@ -396,11 +396,40 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
   }, [channels[0].buffer, channels[1].buffer]);
 }
 
+// Everything that matters to know why the model does not start on a given device, for the "copy diagnostic" button.
+async function diagnose() {
+  const report = { gpuInWorker: Boolean(self.navigator.gpu), crossOriginIsolated: self.crossOriginIsolated, backend, ready: Boolean(sessions) };
+  try {
+    const adapter = await self.navigator.gpu?.requestAdapter();
+    if (adapter) {
+      const { vendor, architecture, description, isFallbackAdapter } = adapter.info ?? {};
+      report.adapter = { vendor, architecture, description, isFallbackAdapter };
+      report.limits = { maxBufferSize: adapter.limits.maxBufferSize, maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize };
+      report.features = [...adapter.features].join(' ');
+    } else report.adapter = null;
+  } catch (error) {
+    report.adapter = `erreur : ${error.message}`;
+  }
+  try {
+    report.storage = await self.navigator.storage?.estimate?.();
+    const store = await openStore();
+    report.opfs = Boolean(store);
+    if (store) {
+      const sizes = await Promise.all(allFiles().map(([path]) => storedSize(store, path)));
+      report.storedFiles = `${allFiles().filter(([, size], index) => sizes[index] === size).length}/${allFiles().length}`;
+    }
+  } catch (error) {
+    report.opfs = `erreur : ${error.message}`;
+  }
+  return report;
+}
+
 self.addEventListener('message', async ({ data }) => {
   try {
     if (data.type === 'check-cache') post({ type: 'cache', cached: await isStored(), gpu: Boolean(self.navigator.gpu) });
     else if (data.type === 'load') await load(data.backend);
     else if (data.type === 'cancel') cancelRequested = true;
+    else if (data.type === 'diagnose') post({ type: 'diagnostic', report: await diagnose() });
     else if (data.type === 'generate') await generate(data);
   } catch (error) {
     post({ type: 'error', id: data.id ?? null, message: error?.message ?? String(error) });
