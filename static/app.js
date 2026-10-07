@@ -265,9 +265,53 @@ const formatMegabytes = bytes => `${Math.round(bytes / 1e6)} Mo`;
 // ?moteur=processeur or ?moteur=carte-graphique forces one or the other, to compare them on a machine.
 const requestedBackend = { processeur: 'wasm', 'carte-graphique': 'webgpu' }[new URLSearchParams(location.search).get('moteur')] ?? 'auto';
 
+// If the browser runs out of memory, it kills the page and reloads it, and an automatic restart would only crash
+// again. So each attempt is noted here until it finishes: after a crash, the page explains instead of looping.
+const ATTEMPT_KEY = 'instru-iagora-tentative';
+function noteAttempt(attempt) {
+  try {
+    if (attempt) localStorage.setItem(ATTEMPT_KEY, JSON.stringify({ ...readAttempt(), ...attempt }));
+    else localStorage.removeItem(ATTEMPT_KEY);
+  } catch {
+    // Storage refused (private browsing): no crash detection, everything else works.
+  }
+}
+function readAttempt() {
+  try {
+    return JSON.parse(localStorage.getItem(ATTEMPT_KEY)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const PART_NAMES = { dit: 'le compositeur', textEncoder: 'la lecture du texte', decoder: 'le décodeur audio', seconds: 'la durée' };
+const BACKEND_NAMES = { webgpu: 'la carte graphique', wasm: 'le processeur' };
+
+function describeCrash(attempt, gpuInWorker) {
+  let when;
+  if (attempt.phase === 'generation') {
+    when = `pendant la création d'une instru de ${formatDuration(attempt.seconds)}`;
+  } else if (attempt.phase === 'demarrage') {
+    when = `pendant le démarrage du modèle sur ${BACKEND_NAMES[attempt.backend] ?? 'cet appareil'}`
+      + (attempt.lastPart ? ` (dernière partie prête : ${PART_NAMES[attempt.lastPart]})` : ' (aucune partie prête)');
+  } else {
+    when = 'pendant le téléchargement du modèle';
+  }
+  return `La dernière tentative s'est arrêtée net ${when} : le navigateur a sans doute manqué de mémoire. `
+    + `(Détail technique : carte graphique ${gpuInWorker ? 'disponible' : 'non disponible'} pour le moteur.)`;
+}
+
 engine.addEventListener('message', ({ data }) => {
   if (data.type === 'cache') {
-    if (data.cached) loadEngine();
+    const crashed = readAttempt();
+    if (crashed) {
+      engineLabel.textContent = describeCrash(crashed, data.gpu)
+        + (crashed.phase === 'generation' ? ' Essayez une instru plus courte ou la vitesse « Rapide ».' : '');
+      $('#engineCard').classList.add('failed');
+      $('#loadButton').hidden = false;
+      $('#loadButton').textContent = 'Réessayer';
+      noteAttempt(null);
+    } else if (data.cached) loadEngine();
     else {
       engineLabel.textContent = 'Le modèle n\'est pas encore sur cet ordinateur. Il pèse 660 Mo et ne se télécharge '
         + 'qu\'une fois, puis le navigateur le garde. De préférence en wifi.';
@@ -277,11 +321,15 @@ engine.addEventListener('message', ({ data }) => {
     setProgress(engineBar, data.loaded / data.total);
     engineLabel.textContent = `Téléchargement du modèle d'IA : ${formatMegabytes(data.loaded)} sur ${formatMegabytes(data.total)} (une seule fois sur cet ordinateur)`;
   } else if (data.type === 'starting') {
+    noteAttempt({ phase: 'demarrage', backend: data.backend, lastPart: null });
     setProgress(engineBar, 1);
     engineLabel.textContent = data.backend === 'webgpu'
       ? 'Démarrage du modèle sur la carte graphique…'
       : 'Démarrage du modèle sur le processeur…';
+  } else if (data.type === 'stage') {
+    noteAttempt({ lastPart: data.stage });
   } else if (data.type === 'ready') {
+    noteAttempt(null);
     engineReady = true;
     backend = data.backend;
     engineBar.hidden = true;
@@ -301,8 +349,10 @@ engine.addEventListener('message', ({ data }) => {
       : data.step === data.steps - 1 ? 'Mixage du son…' : 'Presque fini…';
     $('#generationLabel').textContent = current.estimate ? `${label} · environ ${current.estimate}` : label;
   } else if (data.type === 'done' && current?.id === data.id) {
+    noteAttempt(null);
     finishGeneration(data);
   } else if (data.type === 'error') {
+    noteAttempt(null);
     if (data.id == null) {
       engineLabel.textContent = `Le modèle d'IA n'a pas pu démarrer : ${data.message}. Essayez un navigateur récent `
         + '(Chrome, Edge, Firefox ou Safari) sur un ordinateur avec au moins 8 Go de mémoire.';
@@ -326,6 +376,7 @@ function loadEngine() {
   engineLabel.textContent = 'Préparation du modèle…';
   setProgress(engineBar, 0);
   navigator.storage?.persist?.().catch(() => {});
+  noteAttempt({ phase: 'telechargement' });
   engine.postMessage({ type: 'load', backend: requestedBackend });
 }
 
@@ -347,6 +398,7 @@ async function generate({ prompt, meaning, seconds, steps, seed = crypto.getRand
   setProgress($('#generation .progress'), 0);
   $('#generationLabel').textContent = 'Lecture du prompt…';
   updateGenerateButton();
+  noteAttempt({ phase: 'generation', seconds });
   engine.postMessage({ type: 'generate', id, prompt, seconds, seed, steps });
 }
 

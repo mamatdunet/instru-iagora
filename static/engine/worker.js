@@ -10,7 +10,8 @@ const ORT_BUILDS = { webgpu: 'ort.webgpu.bundle.min.mjs', wasm: 'ort.wasm.bundle
 let ort = null;
 
 const MODEL_BASE = 'https://huggingface.co/lsb/stable-audio-3-small-music-onnx/resolve/d523962dc41a9c632a4928ff9e02538bb11f1806';
-const CACHE_NAME = 'instru-iagora-modele-v1';
+const STORE_NAME = 'instru-iagora-modele-v1';
+const OLD_CACHE_NAME = 'instru-iagora-modele-v1'; // Cache Storage used by the first versions (Safari dropped its files)
 
 // Sizes are listed so the progress bar knows the total before the first byte arrives.
 // Biggest first: its weights are read while nothing else is in memory yet.
@@ -45,19 +46,36 @@ function allFiles() {
   return files;
 }
 
-async function openCache() {
+// The model is kept in the browser's private file system (OPFS): it streams to disk while downloading, and a worker
+// can read any byte range of a file synchronously, which is what keeps the weights out of memory (see DiskBytes).
+// Cache Storage was used first, but Safari on iPhone silently kept none of these large files.
+async function openStore() {
   try {
-    return await caches.open(CACHE_NAME);
+    const root = await navigator.storage.getDirectory();
+    const directory = await root.getDirectoryHandle(STORE_NAME, { create: true });
+    // Sync access handles are the part that matters; old browsers have the directory without them.
+    if (typeof FileSystemFileHandle?.prototype.createSyncAccessHandle !== 'function') return null;
+    return directory;
   } catch {
-    return null; // No Cache Storage (private window, insecure context): the model is kept in memory instead.
+    return null; // Private window or old browser: the model is kept in memory instead.
   }
 }
 
-async function isCached() {
-  const cache = await openCache();
-  if (!cache) return false;
-  const found = await Promise.all(allFiles().map(([path]) => cache.match(`${MODEL_BASE}/${path}`)));
-  return found.every(Boolean);
+const fileName = path => path.replaceAll('/', '__');
+
+async function storedSize(store, path) {
+  try {
+    return (await (await store.getFileHandle(fileName(path))).getFile()).size;
+  } catch {
+    return -1;
+  }
+}
+
+async function isStored() {
+  const store = await openStore();
+  if (!store) return false;
+  const sizes = await Promise.all(allFiles().map(([path]) => storedSize(store, path)));
+  return allFiles().every(([, size], index) => sizes[index] === size);
 }
 
 async function fetchChecked(path) {
@@ -66,7 +84,7 @@ async function fetchChecked(path) {
   return response;
 }
 
-// Without a cache, the file has to stay in memory: read it straight into a buffer of the expected size.
+// Without storage, the file has to stay in memory: read it straight into a buffer of the expected size.
 async function downloadToMemory(path, size, onBytes) {
   const reader = (await fetchChecked(path)).body.getReader();
   let data = new Uint8Array(size);
@@ -87,32 +105,32 @@ async function downloadToMemory(path, size, onBytes) {
   return data;
 }
 
-// With a cache, the download streams to disk without ever being held whole in memory.
-async function downloadToCache(cache, path, size, onBytes) {
-  const url = `${MODEL_BASE}/${path}`;
-  let received = 0;
-  const counter = new TransformStream({
-    transform(chunk, controller) {
-      received += chunk.byteLength;
-      onBytes(chunk.byteLength);
-      controller.enqueue(chunk);
-    },
-  });
+// With storage, each piece goes to disk as it arrives. An interrupted file has the wrong size and is downloaded again.
+async function downloadToStore(store, path, size, onBytes) {
   const response = await fetchChecked(path);
+  const handle = await (await store.getFileHandle(fileName(path), { create: true })).createSyncAccessHandle();
+  let written = 0;
   try {
-    await cache.put(url, new Response(response.body.pipeThrough(counter), { headers: { 'content-type': 'application/octet-stream' } }));
+    handle.truncate(0);
+    const reader = response.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      written += handle.write(value, { at: written });
+      onBytes(value.byteLength);
+    }
+    handle.flush();
   } catch (error) {
     if (error?.name === 'QuotaExceededError') throw new Error('pas assez de place libre sur cet appareil pour garder le modèle (660 Mo)');
     throw error;
+  } finally {
+    handle.close();
   }
-  if (received !== size) {
-    await cache.delete(url);
-    throw new Error(`téléchargement de ${path} interrompu`);
-  }
+  if (written !== size) throw new Error(`téléchargement de ${path} interrompu`);
 }
 
 // Two downloads at a time: enough to fill the connection, little memory in flight.
-async function downloadAll(cache, onProgress) {
+async function downloadAll(store, onProgress) {
   const files = allFiles();
   const total = files.reduce((sum, [, size]) => sum + size, 0);
   let loaded = 0;
@@ -125,20 +143,59 @@ async function downloadAll(cache, onProgress) {
   await Promise.all(Array.from({ length: 2 }, async () => {
     while (queue.length) {
       const [path, size] = queue.shift();
-      if (cache && await cache.match(`${MODEL_BASE}/${path}`)) report(size);
-      else if (cache) await downloadToCache(cache, path, size, report);
+      if (store && await storedSize(store, path) === size) report(size);
+      else if (store) await downloadToStore(store, path, size, report);
       else memory.set(path, await downloadToMemory(path, size, report));
     }
   }));
-  // Read one file back, only when it is needed, so that a single graph is in memory at a time.
-  return async path => {
-    if (!cache) {
+
+  // Read one file back, only when it is needed. Weights (lazy = true) are not even read whole: see DiskBytes.
+  const openHandles = [];
+  const read = async (path, { lazy = false } = {}) => {
+    if (!store) {
       const data = memory.get(path);
       memory.delete(path);
       return data;
     }
-    return new Uint8Array(await (await cache.match(`${MODEL_BASE}/${path}`)).arrayBuffer());
+    const handle = await (await store.getFileHandle(fileName(path))).createSyncAccessHandle();
+    if (lazy) {
+      openHandles.push(handle);
+      return new DiskBytes(handle);
+    }
+    try {
+      const data = new Uint8Array(handle.getSize());
+      handle.read(data, { at: 0 });
+      return data;
+    } finally {
+      handle.close();
+    }
   };
+  // Files read lazily stay open until their session is built.
+  read.closeAll = () => {
+    for (const handle of openHandles.splice(0)) handle.close();
+  };
+  return read;
+}
+
+// ONNX Runtime only reads a weights file through byteLength and subarray(start, end), one weight at a time, and
+// copies each piece straight to the graphics card (or its own memory). This stand-in reads each piece from disk
+// when asked, so a 380 Mo weights file never sits in the page's memory: what lets phones load the model.
+class DiskBytes extends Uint8Array {
+  constructor(handle) {
+    super(0);
+    this.handle = handle;
+    this.size = handle.getSize();
+  }
+
+  get byteLength() {
+    return this.size;
+  }
+
+  subarray(start = 0, end = this.size) {
+    const piece = new Uint8Array(end - start);
+    this.handle.read(piece, { at: start });
+    return piece;
+  }
 }
 
 async function pickBackend(requested) {
@@ -158,7 +215,7 @@ async function pickBackend(requested) {
 async function createSession(read, graph, executionProvider) {
   const model = await read(graph.file);
   const externalData = [];
-  for (const [name] of graph.chunks) externalData.push({ path: name, data: await read(`onnx/${name}`) });
+  for (const [name] of graph.chunks) externalData.push({ path: name, data: await read(`onnx/${name}`, { lazy: true }) });
   return ort.InferenceSession.create(model, {
     executionProviders: [executionProvider],
     externalData,
@@ -175,8 +232,13 @@ async function importRuntime(name) {
 }
 
 async function load(requestedBackend) {
-  const cache = await openCache();
-  const read = await downloadAll(cache, (loaded, total) => post({ type: 'loading', loaded, total }));
+  try {
+    await caches.delete(OLD_CACHE_NAME); // free the space taken by the first versions
+  } catch {
+    // No Cache Storage here: nothing to free.
+  }
+  const store = await openStore();
+  const read = await downloadAll(store, (loaded, total) => post({ type: 'loading', loaded, total }));
   tokenizer = await loadTokenizer(new URL('./tokenizer', import.meta.url).href);
 
   backend = await pickBackend(requestedBackend);
@@ -185,6 +247,8 @@ async function load(requestedBackend) {
     const created = {};
     for (const [name, graph] of Object.entries(GRAPHS)) {
       created[name] = await createSession(read, graph, executionProvider);
+      read.closeAll();
+      post({ type: 'stage', stage: name, backend: executionProvider });
       globalThis.gc?.(); // only exists when a test browser exposes it, to measure memory without pending garbage
     }
     return created;
@@ -193,8 +257,9 @@ async function load(requestedBackend) {
     await importRuntime(backend);
     sessions = await create(backend);
   } catch (error) {
-    // Without a cache the files were handed over once and are gone: no second attempt on the processor.
-    if (backend !== 'webgpu' || !cache) throw error;
+    read.closeAll();
+    // Without storage the files were handed over once and are gone: no second attempt on the processor.
+    if (backend !== 'webgpu' || !store) throw error;
     backend = 'wasm';
     post({ type: 'starting', backend });
     await importRuntime(backend);
@@ -333,7 +398,7 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
 
 self.addEventListener('message', async ({ data }) => {
   try {
-    if (data.type === 'check-cache') post({ type: 'cache', cached: await isCached() });
+    if (data.type === 'check-cache') post({ type: 'cache', cached: await isStored(), gpu: Boolean(self.navigator.gpu) });
     else if (data.type === 'load') await load(data.backend);
     else if (data.type === 'cancel') cancelRequested = true;
     else if (data.type === 'generate') await generate(data);
