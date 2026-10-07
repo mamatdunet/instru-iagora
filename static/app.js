@@ -1,6 +1,12 @@
 import { STYLES, MOODS, INSTRUMENTS, KEYS, FORMS, bpmFeel } from '/static/vocabulaire.js';
 
 const $ = selector => document.querySelector(selector);
+
+// Phones and tablets are told "ce téléphone", computers "cet ordinateur".
+const isPhone = Boolean(navigator.userAgentData?.mobile) || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const THIS_DEVICE = isPhone ? 'ce téléphone' : 'cet ordinateur';
+const YOUR_DEVICE = isPhone ? 'votre téléphone' : 'votre ordinateur';
+document.querySelectorAll('[data-ce-appareil]').forEach(element => { element.textContent = THIS_DEVICE; });
 const MAX_MOODS = 3;
 const MAX_INSTRUMENTS = 5;
 
@@ -216,10 +222,10 @@ $('#extra').addEventListener('input', () => {
     return;
   }
   status.hidden = false;
-  status.textContent = 'Traduction en anglais sur votre ordinateur dès que vous arrêtez d\'écrire…';
+  status.textContent = `Traduction en anglais sur ${YOUR_DEVICE} dès que vous arrêtez d'écrire…`;
   extraTimer = setTimeout(() => {
     const text = state.extraFr.trim();
-    status.textContent = 'Traduction en anglais sur votre ordinateur…';
+    status.textContent = `Traduction en anglais sur ${YOUR_DEVICE}…`;
     extraTranslation = translator.translate('fr-en', text, (loaded, total) => { status.textContent = loadingNote(loaded, total); })
       .then(english => {
         if (state.extraFr.trim() !== text) return; // the visitor kept typing
@@ -238,7 +244,7 @@ $('#translateButton').addEventListener('click', async () => {
   const button = $('#translateButton');
   const meaning = $('#meaning');
   button.disabled = true;
-  meaning.textContent = 'Traduction sur votre ordinateur…';
+  meaning.textContent = `Traduction sur ${YOUR_DEVICE}…`;
   try {
     const french = await translator.translate('en-fr', $('#prompt').value, (loaded, total) => { meaning.textContent = loadingNote(loaded, total); });
     meaning.textContent = `Traduction automatique, approximative (le jargon musical est parfois traduit mot à mot) : « ${french} »`;
@@ -269,7 +275,6 @@ const requestedBackend = { processeur: 'wasm', 'carte-graphique': 'webgpu' }[new
 // or with ?memoire=econome; ?memoire=normale turns it off.
 const LOW_MEMORY_KEY = 'instru-iagora-econome';
 const memoryParameter = new URLSearchParams(location.search).get('memoire');
-const isPhone = navigator.userAgentData?.mobile || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 let lowMemory = memoryParameter === 'econome' || (memoryParameter !== 'normale' && isPhone);
 try {
   if (memoryParameter !== 'normale' && localStorage.getItem(LOW_MEMORY_KEY)) lowMemory = true;
@@ -331,20 +336,32 @@ engine.addEventListener('message', ({ data }) => {
       if (crashed.phase !== 'telechargement') switchToLowMemory();
       engineLabel.textContent = describeCrash(crashed, data.gpu)
         + (crashed.phase === 'generation' ? ' Essayez une instru plus courte ou la vitesse « Rapide ».' : '')
-        + (crashed.phase !== 'telechargement' && !alreadyLow ? ' Le prochain essai utilisera le mode économe en mémoire.' : '');
+        + (!data.storage && isPhone
+          ? ' Ce navigateur ne laisse pas le site garder le modèle sur ce téléphone (onglet de navigation privée ?) : '
+            + 'ouvrez le site dans un onglet normal, le mode économe en mémoire en a besoin.'
+          : crashed.phase !== 'telechargement' && !alreadyLow ? ' Le prochain essai utilisera le mode économe en mémoire.' : '');
       $('#engineCard').classList.add('failed');
       $('#loadButton').hidden = false;
       $('#loadButton').textContent = 'Réessayer';
       noteAttempt(null);
     } else if (data.cached) loadEngine();
-    else {
-      engineLabel.textContent = 'Le modèle n\'est pas encore sur cet ordinateur. Il pèse 660 Mo et ne se télécharge '
-        + 'qu\'une fois, puis le navigateur le garde. De préférence en wifi.';
+    else if (!data.storage && isPhone) {
+      // Private tabs keep nothing on disk: the whole model would have to sit in memory, which phones cannot afford.
+      engineLabel.textContent = 'Ce navigateur ne laisse pas le site garder le modèle sur ce téléphone : c\'est le cas '
+        + 'des onglets de navigation privée. Sans cela, le modèle doit tenir entier dans la mémoire, ce qui fait planter '
+        + 'un téléphone. Ouvrez le site dans un onglet normal.';
+      $('#engineCard').classList.add('failed');
+      $('#loadButton').hidden = false;
+      $('#loadButton').textContent = 'Essayer quand même';
+    } else {
+      engineLabel.textContent = `Le modèle n'est pas encore sur ${THIS_DEVICE}. Il pèse 660 Mo et ne se télécharge `
+        + (data.storage ? 'qu\'une fois, puis le navigateur le garde. De préférence en wifi.'
+          : 'mais ce navigateur ne peut pas le garder (navigation privée ?) : il sera retéléchargé à chaque visite.');
       $('#loadButton').hidden = false;
     }
   } else if (data.type === 'loading') {
     setProgress(engineBar, data.loaded / data.total);
-    engineLabel.textContent = `Téléchargement du modèle d'IA : ${formatMegabytes(data.loaded)} sur ${formatMegabytes(data.total)} (une seule fois sur cet ordinateur)`;
+    engineLabel.textContent = `Téléchargement du modèle d'IA : ${formatMegabytes(data.loaded)} sur ${formatMegabytes(data.total)} (une seule fois sur ${THIS_DEVICE})`;
   } else if (data.type === 'starting') {
     noteAttempt({ phase: 'demarrage', backend: data.backend, lastPart: null, lowMemory: data.lowMemory });
     setProgress(engineBar, 1);
@@ -366,8 +383,8 @@ engine.addEventListener('message', ({ data }) => {
       $('#speed').value = '4';
     }
     engineLabel.textContent = (backend === 'webgpu'
-      ? 'Prêt, sur la carte graphique de cet appareil.'
-      : 'Prêt, sur le processeur de cet appareil (pas de carte graphique utilisable ici) : c\'est plus lent. '
+      ? `Prêt, sur la carte graphique de ${THIS_DEVICE}.`
+      : `Prêt, sur le processeur de ${THIS_DEVICE} (pas de carte graphique utilisable ici) : c'est plus lent. `
         + 'La vitesse « Rapide » est choisie pour vous, et des instrus courtes vont plus vite.')
       + (data.lowMemory ? ' Mode économe en mémoire : le modèle est chargé par morceaux à chaque instru, '
         + 'ce qui ajoute quelques secondes.' : '');
@@ -384,7 +401,8 @@ engine.addEventListener('message', ({ data }) => {
     noteAttempt(null);
     if (data.id == null) {
       engineLabel.textContent = `Le modèle d'IA n'a pas pu démarrer : ${data.message}. Essayez un navigateur récent `
-        + '(Chrome, Edge, Firefox ou Safari) sur un ordinateur avec au moins 8 Go de mémoire.';
+        + (isPhone ? '(Safari ou Chrome à jour), dans un onglet normal plutôt qu\'en navigation privée.'
+          : '(Chrome, Edge, Firefox ou Safari) sur un ordinateur avec au moins 8 Go de mémoire.');
       $('#engineCard').classList.add('failed');
       $('#loadButton').hidden = false;
       $('#loadButton').textContent = 'Réessayer';

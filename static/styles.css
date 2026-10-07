@@ -11,7 +11,8 @@ body { background: var(--surface-muted); }
 .brand { display: flex; align-items: baseline; gap: 12px; }
 .brand .ia-eyebrow { font-size: 11px; }
 
-.page { width: min(1240px, 100%); margin: 0 auto; padding: 32px 20px 48px; display: grid; gap: 24px; }
+/* minmax(0, 1fr): a long option or prompt must wrap, never widen the page past the screen */
+.page { width: min(1240px, 100%); margin: 0 auto; padding: 32px 20px 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 
 .hero { display: grid; gap: 10px; max-width: 760px; }
 .hero .ia-display { font-size: clamp(40px, 6vw, 76px); }
@@ -51,6 +52,7 @@ body { background: var(--surface-muted); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.settings .ia-select { min-width: 0; text-overflow: ellipsis; }
 .settings output { color: var(--blue-600); }
 .range { width: 100%; accent-color: var(--pink-600); margin: 8px 0 0; }
 
@@ -104,12 +106,16 @@ body { background: var(--surface-muted); }
 .about-foot { color: var(--ink-500); font-size: 13px; border-top: 2px solid var(--ink-100); padding-top: 12px; }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 1fr; }
-  .side { position: static; max-height: none; overflow: visible; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; max-height: none; overflow: visible; padding: 0; margin: 0; }
 }
 @media (max-width: 560px) {
   .page { padding: 20px 16px 32px; }
   .composer { padding: 0 16px; }
-  .settings { grid-template-columns: 1fr; }
-  .engine { padding: 16px; }
+  .settings { grid-template-columns: minmax(0, 1fr); }
+  .engine, .prompt-card, .result { padding: 16px; }
 }
+
+/* Grids size their single column to fit: never wider than the screen, long labels wrap instead */
+.side, .composer, .step, .prompt-card, .meaning, .generation, .results, .result-list, .result { grid-template-columns: minmax(0, 1fr); }
+.generate { white-space: normal; text-align: center; line-height: 1.1; padding-top: 8px; padding-bottom: 8px; }

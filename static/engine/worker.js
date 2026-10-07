@@ -394,7 +394,7 @@ async function diagnose() {
 
 self.addEventListener('message', async ({ data }) => {
   try {
-    if (data.type === 'check-cache') post({ type: 'cache', cached: await isStored(), gpu: Boolean(self.navigator.gpu) });
+    if (data.type === 'check-cache') post({ type: 'cache', cached: await isStored(), storage: Boolean(await openStore()), gpu: Boolean(self.navigator.gpu) });
     else if (data.type === 'load') await load(data.backend, data.lowMemory);
     else if (data.type === 'cancel') cancelRequested = true;
     else if (data.type === 'diagnose') post({ type: 'diagnostic', report: await diagnose() });

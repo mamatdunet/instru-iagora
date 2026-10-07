@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#FFFFFF">
-  <meta name="description" content="Créez votre instru avec une IA de musique qui tourne directement sur votre ordinateur.">
+  <meta name="description" content="Créez votre instru avec une IA de musique qui tourne directement sur votre ordinateur ou votre téléphone.">
   <title>Atelier instru · IAgora</title>
   <link rel="stylesheet" href="/static/iagora.css">
   <link rel="stylesheet" href="/static/styles.css">
@@ -25,13 +25,13 @@
       <span class="ia-eyebrow">L'IA par tous et pour tous /</span>
       <h1 class="ia-display">Créez votre instru.</h1>
       <p class="lead">Choisissez un style, une ambiance, des instruments et un tempo : l'IA compose une instru originale
-        de 10 secondes à 2 minutes. Le modèle tourne <strong>sur cet ordinateur</strong>, rien n'est envoyé en ligne.</p>
+        de 10 secondes à 2 minutes. Le modèle tourne <strong>sur <span data-ce-appareil>cet ordinateur</span></strong>, rien n'est envoyé en ligne.</p>
     </section>
 
     <section id="engineCard" class="engine ia-card" aria-live="polite">
       <div class="engine-text">
         <span class="section-label">Le modèle d'IA</span>
-        <p id="engineLabel">Vérification de l'ordinateur…</p>
+        <p id="engineLabel">Vérification de <span data-ce-appareil>cet ordinateur</span>…</p>
       </div>
       <div class="engine-actions">
         <button id="loadButton" class="ia-btn ia-btn--primary" type="button" hidden>Télécharger le modèle (660 Mo)</button>
@@ -198,7 +198,7 @@
           <strong>Stability AI</strong>, le même que celui de la
           <a href="https://huggingface.co/spaces/stabilityai/stable-audio-3" target="_blank" rel="noopener">démo en ligne de Stability AI</a>,
           dans une version compressée pour fonctionner directement dans le navigateur.</p>
-        <p>Le modèle tourne sur cet ordinateur : vos descriptions et vos instrus ne sont envoyées à aucun service d'IA en ligne.
+        <p>Le modèle tourne sur <span data-ce-appareil>cet ordinateur</span> : vos descriptions et vos instrus ne sont envoyées à aucun service d'IA en ligne.
           Il est téléchargé une seule fois (environ 660 Mo), puis gardé par le navigateur. Avec une carte graphique récente,
           une instru de 30 secondes se calcule en quelques secondes ; sans carte graphique, comptez plusieurs minutes.</p>
         <span class="section-label">Ce que vous pouvez faire des instrus</span>
@@ -231,7 +231,7 @@
           <li>★ <strong>Faire tourner l'IA dans le navigateur</strong> : le modèle Small (459 millions de paramètres),
             compressé en 4 bits, accéléré par la carte graphique quand c'est possible. Rien à installer.</li>
           <li>★ <strong>Parler français</strong> : on compose avec des mots français, l'atelier écrit le prompt anglais
-            et explique en français ce qu'il dit ; les précisions libres sont traduites sur l'ordinateur.</li>
+            et explique en français ce qu'il dit ; les précisions libres sont traduites sur l'appareil.</li>
           <li>★ <strong>Ne pas partir d'une page blanche</strong> : 24 styles avec leur tempo habituel, des ambiances,
             des instruments, et un bouton « Au hasard ».</li>
           <li>★ <strong>Retrouver une instru</strong> : chaque instru a sa graine ; « Une variante » garde le prompt et
