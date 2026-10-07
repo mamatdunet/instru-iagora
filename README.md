@@ -6,7 +6,7 @@ sur l'ordinateur de la personne : rien n'est envoyé à un service d'IA en ligne
 - Modèle : [Stable Audio 3.0 Small Music](https://huggingface.co/stabilityai/stable-audio-3-small-music)
   (Stability AI), le même que celui de la [démo en ligne](https://huggingface.co/spaces/stabilityai/stable-audio-3),
   dans sa [conversion ONNX 4 bits pour le navigateur](https://huggingface.co/lsb/stable-audio-3-small-music-onnx) (≈ 660 Mo,
-  téléchargés une seule fois puis gardés dans le cache du navigateur).
+  téléchargés une seule fois puis gardés dans le stockage du navigateur).
 - Moteur : ONNX Runtime Web, sur la carte graphique (WebGPU) quand c'est possible, sinon sur le processeur.
 - Interface en français, aux couleurs du design system IAgora. On compose avec des mots français (style, ambiance,
   instruments, tempo, tonalité, forme) ; l'atelier écrit le prompt anglais que le modèle comprend et explique en
@@ -27,6 +27,11 @@ python3 -m http.server 8080
 
 Sur processeur, la vitesse « Rapide » (4 étapes de diffusion au lieu de 8) est choisie par défaut.
 
+Sur téléphone (ou avec `?memoire=econome`, ou après un plantage sur l'appareil), le **mode économe** ne garde aucun
+morceau du modèle chargé : à chaque instru, chaque morceau est chargé dans un petit worker fermé juste après, pour que
+le navigateur rende sa mémoire graphique. Le pic de mémoire est celui du plus gros morceau (380 Mo) au lieu des
+660 Mo du modèle entier. `?memoire=normale` le désactive.
+
 ## Déployer
 
 N'importe quel hébergement statique convient (Vercel, Netlify, GitHub Pages…). `vercel.json` ajoute les en-têtes
@@ -40,6 +45,8 @@ plusieurs cœurs du processeur quand il n'y a pas de carte graphique utilisable.
 - `static/engine/worker.js` : le pipeline de génération (tokenizer → encodeur de texte T5Gemma → durée →
   transformeur de diffusion, 8 étapes « ping-pong » → décodeur audio), porté de
   [stable-audio-tools](https://github.com/Stability-AI/stable-audio-tools).
+- `static/engine/model.js` : les fichiers du modèle, leur stockage sur l'appareil (OPFS) et leur lecture sur le
+  disque morceau par morceau ; `static/engine/graph.js` : le petit worker du mode économe.
 - `static/engine/tokenizer.js` et `static/engine/tokenizer/` : le tokenizer Gemma dans un format compact
   (12 Mo en mémoire au lieu de 150 Mo, mêmes résultats), produit par `tools/compacter_tokenizer.py`.
 - `static/engine/translate.js` : la traduction français ↔ anglais.

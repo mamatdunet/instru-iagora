@@ -2,25 +2,9 @@
 // Pipeline: tokenizer → text encoder (T5Gemma) → duration embedder → diffusion transformer (8 "ping-pong" steps)
 // → audio decoder. Ported from stable-audio-tools (generate_diffusion_cond_inpaint + sample_flow_pingpong).
 import { loadTokenizer } from './tokenizer.js';
+import { MODEL_BASE, GRAPHS, allFiles, openStore, storedSize, fileName, storeReader, importRuntime, createSession } from './model.js';
 
-// Two builds of ONNX Runtime: only the processor build has the 4-bit embedding operator (GatherBlockQuantized)
-// for the processor; the graphics-card build has it for the graphics card.
-const ORT_DIST = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
-const ORT_BUILDS = { webgpu: 'ort.webgpu.bundle.min.mjs', wasm: 'ort.wasm.bundle.min.mjs' };
-let ort = null;
-
-const MODEL_BASE = 'https://huggingface.co/lsb/stable-audio-3-small-music-onnx/resolve/d523962dc41a9c632a4928ff9e02538bb11f1806';
-const STORE_NAME = 'instru-iagora-modele-v1';
 const OLD_CACHE_NAME = 'instru-iagora-modele-v1'; // Cache Storage used by the first versions (Safari dropped its files)
-
-// Sizes are listed so the progress bar knows the total before the first byte arrives.
-// Biggest first: its weights are read while nothing else is in memory yet.
-const GRAPHS = {
-  dit: { file: 'onnx/dit_q4.onnx', size: 5929366, chunks: [['dit_q4_chunk_0.data', 96468992], ['dit_q4_chunk_1.data', 99614720], ['dit_q4_chunk_2.data', 99614720], ['dit_q4_chunk_3.data', 84451328]] },
-  textEncoder: { file: 'onnx/text_encoder_q4.onnx', size: 2232988, chunks: [['text_encoder_q4_chunk_0.data', 98304000], ['text_encoder_q4_chunk_1.data', 99418112], ['text_encoder_q4_chunk_2.data', 14811136]] },
-  decoder: { file: 'onnx/decoder_q4.onnx', size: 1653261, chunks: [['decoder_q4_chunk_0.data', 44894208]] },
-  seconds: { file: 'onnx/number_conditioner.onnx', size: 798844, chunks: [] },
-};
 
 const SAMPLE_RATE = 44100;
 const LATENT_CHANNELS = 256;
@@ -30,46 +14,14 @@ const STEPS = 8; // what the model was distilled for; 4 is twice as fast, a litt
 const PADDING_SECONDS = 6; // generation always runs 6 s longer than asked, as in stable-audio-tools
 const MAX_SECONDS = 120;
 
+let ort = null;
 let tokenizer = null;
 let sessions = null;
+let lowMemory = false;
 let backend = null;
 let cancelRequested = false;
 
 const post = (message, transfer) => self.postMessage(message, transfer ?? []);
-
-function allFiles() {
-  const files = [];
-  for (const graph of Object.values(GRAPHS)) {
-    files.push([graph.file, graph.size]);
-    for (const [name, size] of graph.chunks) files.push([`onnx/${name}`, size]);
-  }
-  return files;
-}
-
-// The model is kept in the browser's private file system (OPFS): it streams to disk while downloading, and a worker
-// can read any byte range of a file synchronously, which is what keeps the weights out of memory (see DiskBytes).
-// Cache Storage was used first, but Safari on iPhone silently kept none of these large files.
-async function openStore() {
-  try {
-    const root = await navigator.storage.getDirectory();
-    const directory = await root.getDirectoryHandle(STORE_NAME, { create: true });
-    // Sync access handles are the part that matters; old browsers have the directory without them.
-    if (typeof FileSystemFileHandle?.prototype.createSyncAccessHandle !== 'function') return null;
-    return directory;
-  } catch {
-    return null; // Private window or old browser: the model is kept in memory instead.
-  }
-}
-
-const fileName = path => path.replaceAll('/', '__');
-
-async function storedSize(store, path) {
-  try {
-    return (await (await store.getFileHandle(fileName(path))).getFile()).size;
-  } catch {
-    return -1;
-  }
-}
 
 async function isStored() {
   const store = await openStore();
@@ -149,53 +101,15 @@ async function downloadAll(store, onProgress) {
     }
   }));
 
-  // Read one file back, only when it is needed. Weights (lazy = true) are not even read whole: see DiskBytes.
-  const openHandles = [];
-  const read = async (path, { lazy = false } = {}) => {
-    if (!store) {
-      const data = memory.get(path);
-      memory.delete(path);
-      return data;
-    }
-    const handle = await (await store.getFileHandle(fileName(path))).createSyncAccessHandle();
-    if (lazy) {
-      openHandles.push(handle);
-      return new DiskBytes(handle);
-    }
-    try {
-      const data = new Uint8Array(handle.getSize());
-      handle.read(data, { at: 0 });
-      return data;
-    } finally {
-      handle.close();
-    }
+  if (store) return storeReader(store);
+  // Without storage, each file can be handed over once, then it is forgotten.
+  const read = async path => {
+    const data = memory.get(path);
+    memory.delete(path);
+    return data;
   };
-  // Files read lazily stay open until their session is built.
-  read.closeAll = () => {
-    for (const handle of openHandles.splice(0)) handle.close();
-  };
+  read.closeAll = () => {};
   return read;
-}
-
-// ONNX Runtime only reads a weights file through byteLength and subarray(start, end), one weight at a time, and
-// copies each piece straight to the graphics card (or its own memory). This stand-in reads each piece from disk
-// when asked, so a 380 Mo weights file never sits in the page's memory: what lets phones load the model.
-class DiskBytes extends Uint8Array {
-  constructor(handle) {
-    super(0);
-    this.handle = handle;
-    this.size = handle.getSize();
-  }
-
-  get byteLength() {
-    return this.size;
-  }
-
-  subarray(start = 0, end = this.size) {
-    const piece = new Uint8Array(end - start);
-    this.handle.read(piece, { at: start });
-    return piece;
-  }
 }
 
 async function pickBackend(requested) {
@@ -211,27 +125,10 @@ async function pickBackend(requested) {
   return 'wasm';
 }
 
-// One graph at a time: read its files, build the session, then let the bytes go before the next graph.
-async function createSession(read, graph, executionProvider) {
-  const model = await read(graph.file);
-  const externalData = [];
-  for (const [name] of graph.chunks) externalData.push({ path: name, data: await read(`onnx/${name}`, { lazy: true }) });
-  return ort.InferenceSession.create(model, {
-    executionProviders: [executionProvider],
-    externalData,
-    graphOptimizationLevel: 'all',
-    enableCpuMemArena: false, // the arena keeps its peak size forever; phones cannot afford it
-    extra: { session: { disable_prepacking: '1' } }, // no second, repacked copy of the weights on the processor
-  });
-}
-
-async function importRuntime(name) {
-  ort = await import(ORT_DIST + ORT_BUILDS[name]);
-  ort.env.wasm.wasmPaths = ORT_DIST;
-  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, self.navigator.hardwareConcurrency || 1) : 1;
-}
-
-async function load(requestedBackend) {
+// Normal mode keeps the four graphs on the graphics card (660 Mo). Low-memory mode, for phones, keeps none: each
+// generation opens the graphs it needs in a short-lived worker (see graph.js) and closes it before the next ones,
+// so the peak is the biggest graph alone (380 Mo) instead of all of them. Each instru takes a few seconds longer.
+async function load(requestedBackend, requestedLowMemory) {
   try {
     await caches.delete(OLD_CACHE_NAME); // free the space taken by the first versions
   } catch {
@@ -240,13 +137,21 @@ async function load(requestedBackend) {
   const store = await openStore();
   const read = await downloadAll(store, (loaded, total) => post({ type: 'loading', loaded, total }));
   tokenizer = await loadTokenizer(new URL('./tokenizer', import.meta.url).href);
+  // The short-lived workers read the files from disk; without storage only the normal mode is possible.
+  lowMemory = Boolean(requestedLowMemory && store);
 
   backend = await pickBackend(requestedBackend);
-  post({ type: 'starting', backend });
+  post({ type: 'starting', backend, lowMemory });
+  if (lowMemory) {
+    ort = await importRuntime(backend); // for its Tensor type only: no graph lives here
+    sessions = {};
+    post({ type: 'ready', backend, lowMemory });
+    return;
+  }
   const create = async executionProvider => {
     const created = {};
     for (const [name, graph] of Object.entries(GRAPHS)) {
-      created[name] = await createSession(read, graph, executionProvider);
+      created[name] = await createSession(ort, read, graph, executionProvider);
       read.closeAll();
       post({ type: 'stage', stage: name, backend: executionProvider });
       globalThis.gc?.(); // only exists when a test browser exposes it, to measure memory without pending garbage
@@ -254,18 +159,73 @@ async function load(requestedBackend) {
     return created;
   };
   try {
-    await importRuntime(backend);
+    ort = await importRuntime(backend);
     sessions = await create(backend);
   } catch (error) {
     read.closeAll();
     // Without storage the files were handed over once and are gone: no second attempt on the processor.
     if (backend !== 'webgpu' || !store) throw error;
     backend = 'wasm';
-    post({ type: 'starting', backend });
-    await importRuntime(backend);
+    post({ type: 'starting', backend, lowMemory });
+    ort = await importRuntime(backend);
     sessions = await create(backend);
   }
-  post({ type: 'ready', backend });
+  post({ type: 'ready', backend, lowMemory });
+}
+
+// Graphs opened in a short-lived worker, with the same run() as a local session.
+async function openGraphs(names) {
+  const worker = new Worker(new URL('./graph.js', import.meta.url), { type: 'module' });
+  const pending = new Map();
+  let next = 0;
+  const failAll = message => {
+    for (const { reject } of pending.values()) reject(new Error(message));
+    pending.clear();
+  };
+  worker.addEventListener('message', ({ data }) => {
+    const call = pending.get(data.id);
+    pending.delete(data.id);
+    if (data.type === 'error') call?.reject(new Error(data.message));
+    else call?.resolve(data);
+  });
+  worker.addEventListener('error', event => failAll(event.message || 'une partie du moteur s\'est arrêtée'));
+  const call = message => new Promise((resolve, reject) => {
+    const id = ++next;
+    pending.set(id, { resolve, reject });
+    worker.postMessage({ ...message, id });
+  });
+  try {
+    await call({ type: 'open', names, backend });
+  } catch (error) {
+    worker.terminate();
+    throw error;
+  }
+  const graphs = Object.fromEntries(names.map(name => [name, {
+    async run(feeds) {
+      const plain = Object.fromEntries(Object.entries(feeds).map(([key, tensor]) => [key, { type: tensor.type, data: tensor.data, dims: tensor.dims }]));
+      const { outputs } = await call({ type: 'run', name, feeds: plain });
+      return Object.fromEntries(Object.entries(outputs).map(([key, output]) => [key, {
+        dims: output.dims,
+        getData: async () => output.data,
+        dispose() {},
+      }]));
+    },
+  }]));
+  return { graphs, close: () => worker.terminate() };
+}
+
+const PHASES = { textEncoder: 'Chargement de la lecture du texte…', dit: 'Chargement du compositeur…', decoder: 'Chargement du décodeur audio…' };
+
+// Run a task with some graphs: the resident ones, or (low-memory mode) ones opened for the task and closed after.
+async function withGraphs(id, names, task) {
+  if (!lowMemory) return task(sessions);
+  post({ type: 'phase', id, label: PHASES[names[0]] });
+  const { graphs, close } = await openGraphs(names);
+  try {
+    return await task(graphs);
+  } finally {
+    close();
+  }
 }
 
 // Deterministic Gaussian noise so that a seed always gives the same instru (mulberry32 + Box-Muller).
@@ -319,13 +279,17 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
     inputIds[index] = BigInt(token);
     attentionMask[index] = 1n;
   });
-  const text = await sessions.textEncoder.run({
-    input_ids: new ort.Tensor('int64', inputIds, [1, TEXT_TOKENS]),
-    attention_mask: new ort.Tensor('int64', attentionMask, [1, TEXT_TOKENS]),
+  const [textData, durationData] = await withGraphs(id, ['textEncoder', 'seconds'], async graphs => {
+    const { last_hidden_state: hidden } = await graphs.textEncoder.run({
+      input_ids: new ort.Tensor('int64', inputIds, [1, TEXT_TOKENS]),
+      attention_mask: new ort.Tensor('int64', attentionMask, [1, TEXT_TOKENS]),
+    });
+    const { embedding } = await graphs.seconds.run({ seconds: new ort.Tensor('float32', Float32Array.of(seconds), [1]) });
+    const data = [await hidden.getData(), await embedding.getData()];
+    hidden.dispose();
+    embedding.dispose();
+    return data;
   });
-  const duration = await sessions.seconds.run({ seconds: new ort.Tensor('float32', Float32Array.of(seconds), [1]) });
-  const textData = await text.last_hidden_state.getData();
-  const durationData = await duration.embedding.getData();
 
   // Cross-attention sees the 256 text tokens followed by the duration; adaLN sees the duration alone.
   const crossData = new Float32Array((TEXT_TOKENS + 1) * COND_DIM);
@@ -349,33 +313,39 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
   let x = new Float32Array(size);
   for (let i = 0; i < size; i++) x[i] = noise();
   const t = schedule(steps);
-  for (let step = 0; step < steps; step++) {
-    if (cancelRequested) throw new Error('annulé');
-    const output = await sessions.dit.run({
-      x: new ort.Tensor('float32', x, [1, LATENT_CHANNELS, frames]),
-      t: new ort.Tensor('float32', Float32Array.of(t[step]), [1]),
-      cross_attn_cond: crossAttnCond,
-      global_embed: globalEmbed,
-      local_add_cond: localAddCond,
-      padding_mask: paddingMaskTensor,
-    });
-    const velocity = await output.out.getData();
-    output.out.dispose();
-    const next = new Float32Array(size);
-    const tNow = t[step];
-    const tNext = t[step + 1];
-    for (let i = 0; i < size; i++) {
-      const denoised = x[i] - tNow * velocity[i];
-      next[i] = tNext === 0 ? denoised : (1 - tNext) * denoised + tNext * noise();
+  x = await withGraphs(id, ['dit'], async ({ dit }) => {
+    for (let step = 0; step < steps; step++) {
+      if (cancelRequested) throw new Error('annulé');
+      const output = await dit.run({
+        x: new ort.Tensor('float32', x, [1, LATENT_CHANNELS, frames]),
+        t: new ort.Tensor('float32', Float32Array.of(t[step]), [1]),
+        cross_attn_cond: crossAttnCond,
+        global_embed: globalEmbed,
+        local_add_cond: localAddCond,
+        padding_mask: paddingMaskTensor,
+      });
+      const velocity = await output.out.getData();
+      output.out.dispose();
+      const next = new Float32Array(size);
+      const tNow = t[step];
+      const tNext = t[step + 1];
+      for (let i = 0; i < size; i++) {
+        const denoised = x[i] - tNow * velocity[i];
+        next[i] = tNext === 0 ? denoised : (1 - tNext) * denoised + tNext * noise();
+      }
+      x = next;
+      post({ type: 'progress', id, step: step + 1, steps: steps + 1 });
     }
-    x = next;
-    post({ type: 'progress', id, step: step + 1, steps: steps + 1 });
-  }
+    return x;
+  });
 
   // 4. Decode to 44.1 kHz stereo and keep only the requested duration.
-  const decoded = await sessions.decoder.run({ latents: new ort.Tensor('float32', x, [1, LATENT_CHANNELS, frames]) });
-  const audio = await decoded.audio.getData();
-  const totalSamples = decoded.audio.dims[2];
+  const [audio, totalSamples] = await withGraphs(id, ['decoder'], async ({ decoder }) => {
+    const { audio: decoded } = await decoder.run({ latents: new ort.Tensor('float32', x, [1, LATENT_CHANNELS, frames]) });
+    const result = [await decoded.getData(), decoded.dims[2]];
+    decoded.dispose();
+    return result;
+  });
   const length = Math.min(totalSamples, Math.round(seconds * SAMPLE_RATE));
   const fade = Math.min(length, Math.round(0.03 * SAMPLE_RATE)); // avoids a click on the last sample
   const channels = [0, 1].map(channel => {
@@ -387,8 +357,6 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
     }
     return data;
   });
-  decoded.audio.dispose();
-  for (const tensor of [text.last_hidden_state, duration.embedding]) tensor.dispose();
   post({ type: 'progress', id, step: steps + 1, steps: steps + 1 });
   post({
     type: 'done', id, left: channels[0], right: channels[1], sampleRate: SAMPLE_RATE,
@@ -398,7 +366,7 @@ async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
 
 // Everything that matters to know why the model does not start on a given device, for the "copy diagnostic" button.
 async function diagnose() {
-  const report = { gpuInWorker: Boolean(self.navigator.gpu), crossOriginIsolated: self.crossOriginIsolated, backend, ready: Boolean(sessions) };
+  const report = { gpuInWorker: Boolean(self.navigator.gpu), crossOriginIsolated: self.crossOriginIsolated, backend, lowMemory, ready: Boolean(sessions) };
   try {
     const adapter = await self.navigator.gpu?.requestAdapter();
     if (adapter) {
@@ -427,7 +395,7 @@ async function diagnose() {
 self.addEventListener('message', async ({ data }) => {
   try {
     if (data.type === 'check-cache') post({ type: 'cache', cached: await isStored(), gpu: Boolean(self.navigator.gpu) });
-    else if (data.type === 'load') await load(data.backend);
+    else if (data.type === 'load') await load(data.backend, data.lowMemory);
     else if (data.type === 'cancel') cancelRequested = true;
     else if (data.type === 'diagnose') post({ type: 'diagnostic', report: await diagnose() });
     else if (data.type === 'generate') await generate(data);

@@ -265,6 +265,26 @@ const formatMegabytes = bytes => `${Math.round(bytes / 1e6)} Mo`;
 // ?moteur=processeur or ?moteur=carte-graphique forces one or the other, to compare them on a machine.
 const requestedBackend = { processeur: 'wasm', 'carte-graphique': 'webgpu' }[new URLSearchParams(location.search).get('moteur')] ?? 'auto';
 
+// Low-memory mode (the model loaded piece by piece for each instru): on phones, after a crash on this device,
+// or with ?memoire=econome; ?memoire=normale turns it off.
+const LOW_MEMORY_KEY = 'instru-iagora-econome';
+const memoryParameter = new URLSearchParams(location.search).get('memoire');
+const isPhone = navigator.userAgentData?.mobile || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+let lowMemory = memoryParameter === 'econome' || (memoryParameter !== 'normale' && isPhone);
+try {
+  if (memoryParameter !== 'normale' && localStorage.getItem(LOW_MEMORY_KEY)) lowMemory = true;
+} catch {
+  // Storage refused: the device-based choice stands.
+}
+function switchToLowMemory() {
+  lowMemory = true;
+  try {
+    localStorage.setItem(LOW_MEMORY_KEY, '1');
+  } catch {
+    // Storage refused: low memory for this visit only.
+  }
+}
+
 // If the browser runs out of memory, it kills the page and reloads it, and an automatic restart would only crash
 // again. So each attempt is noted here until it finishes: after a crash, the page explains instead of looping.
 const ATTEMPT_KEY = 'instru-iagora-tentative';
@@ -307,8 +327,11 @@ engine.addEventListener('message', ({ data }) => {
     const crashed = readAttempt();
     lastCrash = crashed;
     if (crashed) {
+      const alreadyLow = crashed.lowMemory;
+      if (crashed.phase !== 'telechargement') switchToLowMemory();
       engineLabel.textContent = describeCrash(crashed, data.gpu)
-        + (crashed.phase === 'generation' ? ' Essayez une instru plus courte ou la vitesse « Rapide ».' : '');
+        + (crashed.phase === 'generation' ? ' Essayez une instru plus courte ou la vitesse « Rapide ».' : '')
+        + (crashed.phase !== 'telechargement' && !alreadyLow ? ' Le prochain essai utilisera le mode économe en mémoire.' : '');
       $('#engineCard').classList.add('failed');
       $('#loadButton').hidden = false;
       $('#loadButton').textContent = 'Réessayer';
@@ -323,11 +346,13 @@ engine.addEventListener('message', ({ data }) => {
     setProgress(engineBar, data.loaded / data.total);
     engineLabel.textContent = `Téléchargement du modèle d'IA : ${formatMegabytes(data.loaded)} sur ${formatMegabytes(data.total)} (une seule fois sur cet ordinateur)`;
   } else if (data.type === 'starting') {
-    noteAttempt({ phase: 'demarrage', backend: data.backend, lastPart: null });
+    noteAttempt({ phase: 'demarrage', backend: data.backend, lastPart: null, lowMemory: data.lowMemory });
     setProgress(engineBar, 1);
     engineLabel.textContent = data.backend === 'webgpu'
       ? 'Démarrage du modèle sur la carte graphique…'
       : 'Démarrage du modèle sur le processeur…';
+  } else if (data.type === 'phase' && current?.id === data.id) {
+    $('#generationLabel').textContent = data.label;
   } else if (data.type === 'stage') {
     noteAttempt({ lastPart: data.stage });
   } else if (data.type === 'ready') {
@@ -340,10 +365,12 @@ engine.addEventListener('message', ({ data }) => {
       state.steps = 4;
       $('#speed').value = '4';
     }
-    engineLabel.textContent = backend === 'webgpu'
-      ? 'Prêt, sur la carte graphique de cet ordinateur.'
-      : 'Prêt, sur le processeur de cet ordinateur (pas de carte graphique utilisable ici) : c\'est plus lent. '
-        + 'La vitesse « Rapide » est choisie pour vous, et des instrus courtes vont plus vite.';
+    engineLabel.textContent = (backend === 'webgpu'
+      ? 'Prêt, sur la carte graphique de cet appareil.'
+      : 'Prêt, sur le processeur de cet appareil (pas de carte graphique utilisable ici) : c\'est plus lent. '
+        + 'La vitesse « Rapide » est choisie pour vous, et des instrus courtes vont plus vite.')
+      + (data.lowMemory ? ' Mode économe en mémoire : le modèle est chargé par morceaux à chaque instru, '
+        + 'ce qui ajoute quelques secondes.' : '');
     updateGenerateButton();
   } else if (data.type === 'progress' && current?.id === data.id) {
     setProgress($('#generation .progress'), data.step / data.steps);
@@ -389,6 +416,7 @@ $('#diagnosticButton').addEventListener('click', async () => {
     page: location.href,
     navigateur: navigator.userAgent,
     gpuInPage: Boolean(navigator.gpu),
+    modeEconome: lowMemory,
     memoire: navigator.deviceMemory ?? null,
     coeurs: navigator.hardwareConcurrency ?? null,
     tentative: readAttempt(),
@@ -417,7 +445,7 @@ function loadEngine() {
   setProgress(engineBar, 0);
   navigator.storage?.persist?.().catch(() => {});
   noteAttempt({ phase: 'telechargement' });
-  engine.postMessage({ type: 'load', backend: requestedBackend });
+  engine.postMessage({ type: 'load', backend: requestedBackend, lowMemory });
 }
 
 $('#loadButton').addEventListener('click', loadEngine);
@@ -438,7 +466,7 @@ async function generate({ prompt, meaning, seconds, steps, seed = crypto.getRand
   setProgress($('#generation .progress'), 0);
   $('#generationLabel').textContent = 'Lecture du prompt…';
   updateGenerateButton();
-  noteAttempt({ phase: 'generation', seconds });
+  noteAttempt({ phase: 'generation', seconds, lowMemory });
   engine.postMessage({ type: 'generate', id, prompt, seconds, seed, steps });
 }
 
