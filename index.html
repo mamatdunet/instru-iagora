@@ -34,7 +34,7 @@
         <p id="engineLabel">Vérification de l'ordinateur…</p>
       </div>
       <div class="engine-actions">
-        <button id="loadButton" class="ia-btn ia-btn--primary" type="button" hidden>Télécharger le modèle (680 Mo)</button>
+        <button id="loadButton" class="ia-btn ia-btn--primary" type="button" hidden>Télécharger le modèle (660 Mo)</button>
       </div>
       <div id="engineBar" class="progress" hidden><span></span></div>
     </section>
@@ -88,6 +88,13 @@
             <label class="ia-field">
               <span>Durée : <output id="secondsValue">30 s</output></span>
               <input id="seconds" class="range" type="range" min="10" max="120" step="5" value="30">
+            </label>
+            <label class="ia-field">
+              <span>Vitesse</span>
+              <select id="speed" class="ia-select">
+                <option value="8">Normale (le meilleur son)</option>
+                <option value="4">Rapide (2 fois plus vite, un peu moins fin)</option>
+              </select>
             </label>
           </div>
         </div>
@@ -191,7 +198,7 @@
           <a href="https://huggingface.co/spaces/stabilityai/stable-audio-3" target="_blank" rel="noopener">démo en ligne de Stability AI</a>,
           dans une version compressée pour fonctionner directement dans le navigateur.</p>
         <p>Le modèle tourne sur cet ordinateur : vos descriptions et vos instrus ne sont envoyées à aucun service d'IA en ligne.
-          Il est téléchargé une seule fois (environ 680 Mo), puis gardé par le navigateur. Avec une carte graphique récente,
+          Il est téléchargé une seule fois (environ 660 Mo), puis gardé par le navigateur. Avec une carte graphique récente,
           une instru de 30 secondes se calcule en quelques secondes ; sans carte graphique, comptez plusieurs minutes.</p>
         <span class="section-label">Ce que vous pouvez faire des instrus</span>
         <p>Selon la licence de Stability AI, les instrus générées vous appartiennent. Vous pouvez les utiliser, y compris

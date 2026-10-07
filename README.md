@@ -5,7 +5,7 @@ sur l'ordinateur de la personne : rien n'est envoyé à un service d'IA en ligne
 
 - Modèle : [Stable Audio 3.0 Small Music](https://huggingface.co/stabilityai/stable-audio-3-small-music)
   (Stability AI), le même que celui de la [démo en ligne](https://huggingface.co/spaces/stabilityai/stable-audio-3),
-  dans sa [conversion ONNX 4 bits pour le navigateur](https://huggingface.co/lsb/stable-audio-3-small-music-onnx) (≈ 680 Mo,
+  dans sa [conversion ONNX 4 bits pour le navigateur](https://huggingface.co/lsb/stable-audio-3-small-music-onnx) (≈ 660 Mo,
   téléchargés une seule fois puis gardés dans le cache du navigateur).
 - Moteur : ONNX Runtime Web, sur la carte graphique (WebGPU) quand c'est possible, sinon sur le processeur.
 - Interface en français, aux couleurs du design system IAgora. On compose avec des mots français (style, ambiance,
@@ -23,7 +23,9 @@ python3 -m http.server 8080
 # puis ouvrir http://localhost:8080
 ```
 
-`?moteur=processeur` dans l'adresse force le processeur, pour comparer avec la carte graphique.
+`?moteur=processeur` ou `?moteur=carte-graphique` dans l'adresse force l'un ou l'autre, pour comparer.
+
+Sur processeur, la vitesse « Rapide » (4 étapes de diffusion au lieu de 8) est choisie par défaut.
 
 ## Déployer
 
@@ -38,6 +40,8 @@ plusieurs cœurs du processeur quand il n'y a pas de carte graphique utilisable.
 - `static/engine/worker.js` : le pipeline de génération (tokenizer → encodeur de texte T5Gemma → durée →
   transformeur de diffusion, 8 étapes « ping-pong » → décodeur audio), porté de
   [stable-audio-tools](https://github.com/Stability-AI/stable-audio-tools).
+- `static/engine/tokenizer.js` et `static/engine/tokenizer/` : le tokenizer Gemma dans un format compact
+  (12 Mo en mémoire au lieu de 150 Mo, mêmes résultats), produit par `tools/compacter_tokenizer.py`.
 - `static/engine/translate.js` : la traduction français ↔ anglais.
 - `static/iagora.css`, `static/fonts/` : le design system IAgora.
 

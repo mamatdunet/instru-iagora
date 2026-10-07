@@ -14,6 +14,8 @@ const state = {
   key: KEYS[0],
   form: FORMS[0],
   seconds: 30,
+  steps: 8,
+  stepsChosen: false, // once the visitor picks a speed, the engine no longer picks it for them
   extraFr: '',
   extraEn: '',
   manual: false,
@@ -119,6 +121,10 @@ function formatDuration(seconds) {
 
 $('#bpm').addEventListener('input', event => { state.bpm = Number(event.target.value); changed(); });
 $('#seconds').addEventListener('input', event => { state.seconds = Number(event.target.value); changed(); });
+$('#speed').addEventListener('change', event => {
+  state.steps = Number(event.target.value);
+  state.stepsChosen = true;
+});
 $('#key').addEventListener('change', event => { state.key = KEYS[Number(event.target.value)]; changed(); });
 $('#form').addEventListener('change', event => { state.form = FORMS[Number(event.target.value)]; changed(); });
 
@@ -250,20 +256,20 @@ let engineReady = false;
 let backend = null;
 let current = null; // generation in progress
 let nextGeneration = 1;
-let secondsPerAudioSecond = null; // measured after the first instru, for time estimates
+let secondsPerStepAndSecond = null; // measured after the first instru, for time estimates
 
 const engineBar = $('#engineBar');
 const engineLabel = $('#engineLabel');
 const formatMegabytes = bytes => `${Math.round(bytes / 1e6)} Mo`;
 
-// ?moteur=processeur forces the processor, to compare with the graphics card.
-const requestedBackend = new URLSearchParams(location.search).get('moteur') === 'processeur' ? 'wasm' : 'auto';
+// ?moteur=processeur or ?moteur=carte-graphique forces one or the other, to compare them on a machine.
+const requestedBackend = { processeur: 'wasm', 'carte-graphique': 'webgpu' }[new URLSearchParams(location.search).get('moteur')] ?? 'auto';
 
 engine.addEventListener('message', ({ data }) => {
   if (data.type === 'cache') {
     if (data.cached) loadEngine();
     else {
-      engineLabel.textContent = 'Le modèle n\'est pas encore sur cet ordinateur. Il pèse 680 Mo et ne se télécharge '
+      engineLabel.textContent = 'Le modèle n\'est pas encore sur cet ordinateur. Il pèse 660 Mo et ne se télécharge '
         + 'qu\'une fois, puis le navigateur le garde. De préférence en wifi.';
       $('#loadButton').hidden = false;
     }
@@ -280,10 +286,14 @@ engine.addEventListener('message', ({ data }) => {
     backend = data.backend;
     engineBar.hidden = true;
     $('#engineCard').classList.add('ready');
+    if (backend !== 'webgpu' && !state.stepsChosen) {
+      state.steps = 4;
+      $('#speed').value = '4';
+    }
     engineLabel.textContent = backend === 'webgpu'
       ? 'Prêt, sur la carte graphique de cet ordinateur.'
-      : 'Prêt, sur le processeur de cet ordinateur (pas de carte graphique utilisable ici) : c\'est plus lent, '
-        + 'comptez plusieurs minutes pour 30 secondes de musique.';
+      : 'Prêt, sur le processeur de cet ordinateur (pas de carte graphique utilisable ici) : c\'est plus lent. '
+        + 'La vitesse « Rapide » est choisie pour vous, et des instrus courtes vont plus vite.';
     updateGenerateButton();
   } else if (data.type === 'progress' && current?.id === data.id) {
     setProgress($('#generation .progress'), data.step / data.steps);
@@ -328,16 +338,16 @@ function updateGenerateButton() {
   button.textContent = engineReady ? 'Générer l\'instru' : 'Générer l\'instru (modèle à charger)';
 }
 
-async function generate({ prompt, meaning, seconds, seed = crypto.getRandomValues(new Uint32Array(1))[0], styleName, bpm }) {
+async function generate({ prompt, meaning, seconds, steps, seed = crypto.getRandomValues(new Uint32Array(1))[0], styleName, bpm }) {
   if (!engineReady || current) return;
   const id = nextGeneration++;
-  const estimate = secondsPerAudioSecond ? formatWait(secondsPerAudioSecond * seconds) : null;
-  current = { id, prompt, meaning, seconds, seed, styleName, bpm, estimate };
+  const estimate = secondsPerStepAndSecond ? formatWait(secondsPerStepAndSecond * seconds * steps) : null;
+  current = { id, prompt, meaning, seconds, steps, seed, styleName, bpm, estimate };
   $('#generation').hidden = false;
   setProgress($('#generation .progress'), 0);
   $('#generationLabel').textContent = 'Lecture du prompt…';
   updateGenerateButton();
-  engine.postMessage({ type: 'generate', id, prompt, seconds, seed });
+  engine.postMessage({ type: 'generate', id, prompt, seconds, seed, steps });
 }
 
 function formatWait(seconds) {
@@ -355,6 +365,7 @@ $('#generateButton').addEventListener('click', async () => {
     prompt: $('#prompt').value.trim(),
     meaning: $('#meaning').textContent,
     seconds: state.seconds,
+    steps: state.steps,
     styleName: state.style?.fr ?? 'instru',
     bpm: state.bpm,
   });
@@ -378,7 +389,7 @@ let resultCount = 0;
 
 function finishGeneration({ left, right, sampleRate, seconds: computeSeconds }) {
   const job = current;
-  secondsPerAudioSecond = computeSeconds / job.seconds;
+  secondsPerStepAndSecond = computeSeconds / (job.seconds * job.steps);
   stopGeneration(null);
   resultCount += 1;
   addResult({ ...job, number: resultCount, left, right, sampleRate, computeSeconds });
@@ -436,7 +447,7 @@ function addResult(result) {
   const audio = item.querySelector('audio');
   audio.src = url;
   item.querySelector('.result-title').textContent = `Instru n° ${result.number}`;
-  item.querySelector('.result-meta').textContent = `${formatDuration(result.seconds)} · graine ${result.seed} · calculée en ${formatWait(result.computeSeconds)}`;
+  item.querySelector('.result-meta').textContent = `${formatDuration(result.seconds)} · graine ${result.seed}${result.steps < 8 ? ' · rapide' : ''} · calculée en ${formatWait(result.computeSeconds)}`;
   item.querySelector('.result-prompt').textContent = result.prompt;
   item.querySelector('.result-meaning').textContent = result.meaning;
   const download = item.querySelector('[data-download]');

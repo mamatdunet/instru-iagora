@@ -1,7 +1,7 @@
 // Stable Audio 3.0 Small Music, run entirely in the browser with ONNX Runtime Web.
 // Pipeline: tokenizer → text encoder (T5Gemma) → duration embedder → diffusion transformer (8 "ping-pong" steps)
 // → audio decoder. Ported from stable-audio-tools (generate_diffusion_cond_inpaint + sample_flow_pingpong).
-import { Tokenizer } from 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/+esm';
+import { loadTokenizer } from './tokenizer.js';
 
 // Two builds of ONNX Runtime: only the processor build has the 4-bit embedding operator (GatherBlockQuantized)
 // for the processor; the graphics-card build has it for the graphics card.
@@ -13,19 +13,19 @@ const MODEL_BASE = 'https://huggingface.co/lsb/stable-audio-3-small-music-onnx/r
 const CACHE_NAME = 'instru-iagora-modele-v1';
 
 // Sizes are listed so the progress bar knows the total before the first byte arrives.
+// Biggest first: its weights are read while nothing else is in memory yet.
 const GRAPHS = {
-  textEncoder: { file: 'onnx/text_encoder_q4.onnx', size: 2232988, chunks: [['text_encoder_q4_chunk_0.data', 98304000], ['text_encoder_q4_chunk_1.data', 99418112], ['text_encoder_q4_chunk_2.data', 14811136]] },
-  seconds: { file: 'onnx/number_conditioner.onnx', size: 798844, chunks: [] },
   dit: { file: 'onnx/dit_q4.onnx', size: 5929366, chunks: [['dit_q4_chunk_0.data', 96468992], ['dit_q4_chunk_1.data', 99614720], ['dit_q4_chunk_2.data', 99614720], ['dit_q4_chunk_3.data', 84451328]] },
+  textEncoder: { file: 'onnx/text_encoder_q4.onnx', size: 2232988, chunks: [['text_encoder_q4_chunk_0.data', 98304000], ['text_encoder_q4_chunk_1.data', 99418112], ['text_encoder_q4_chunk_2.data', 14811136]] },
   decoder: { file: 'onnx/decoder_q4.onnx', size: 1653261, chunks: [['decoder_q4_chunk_0.data', 44894208]] },
+  seconds: { file: 'onnx/number_conditioner.onnx', size: 798844, chunks: [] },
 };
-const TOKENIZER_FILES = [['tokenizer/tokenizer.json', 34362428], ['tokenizer/tokenizer_config.json', 469]];
 
 const SAMPLE_RATE = 44100;
 const LATENT_CHANNELS = 256;
 const TEXT_TOKENS = 256;
 const COND_DIM = 768;
-const STEPS = 8;
+const STEPS = 8; // what the model was distilled for; 4 is twice as fast, a little rougher
 const PADDING_SECONDS = 6; // generation always runs 6 s longer than asked, as in stable-audio-tools
 const MAX_SECONDS = 120;
 
@@ -37,7 +37,7 @@ let cancelRequested = false;
 const post = (message, transfer) => self.postMessage(message, transfer ?? []);
 
 function allFiles() {
-  const files = [...TOKENIZER_FILES];
+  const files = [];
   for (const graph of Object.values(GRAPHS)) {
     files.push([graph.file, graph.size]);
     for (const [name, size] of graph.chunks) files.push([`onnx/${name}`, size]);
@@ -49,7 +49,7 @@ async function openCache() {
   try {
     return await caches.open(CACHE_NAME);
   } catch {
-    return null; // No Cache Storage (private window, insecure context): download every visit.
+    return null; // No Cache Storage (private window, insecure context): the model is kept in memory instead.
   }
 }
 
@@ -60,48 +60,59 @@ async function isCached() {
   return found.every(Boolean);
 }
 
-// Download one file (or read it from the cache), reporting bytes as they arrive.
-async function fetchFile(cache, path, onBytes) {
-  const url = `${MODEL_BASE}/${path}`;
-  const cached = cache && await cache.match(url);
-  if (cached) {
-    const data = new Uint8Array(await cached.arrayBuffer());
-    onBytes(data.byteLength);
-    return data;
-  }
-  const response = await fetch(url);
+async function fetchChecked(path) {
+  const response = await fetch(`${MODEL_BASE}/${path}`);
   if (!response.ok) throw new Error(`téléchargement de ${path} impossible (${response.status})`);
-  const expected = Number(response.headers.get('content-length')) || 0;
-  const reader = response.body.getReader();
-  const parts = [];
+  return response;
+}
+
+// Without a cache, the file has to stay in memory: read it straight into a buffer of the expected size.
+async function downloadToMemory(path, size, onBytes) {
+  const reader = (await fetchChecked(path)).body.getReader();
+  let data = new Uint8Array(size);
   let received = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    parts.push(value);
+    if (received + value.byteLength > data.byteLength) {
+      const bigger = new Uint8Array(Math.max(data.byteLength * 2, received + value.byteLength));
+      bigger.set(data);
+      data = bigger;
+    }
+    data.set(value, received);
     received += value.byteLength;
     onBytes(value.byteLength);
   }
-  if (expected && received !== expected) throw new Error(`téléchargement de ${path} interrompu`);
-  const data = new Uint8Array(received);
-  let offset = 0;
-  for (const part of parts) {
-    data.set(part, offset);
-    offset += part.byteLength;
-  }
-  if (cache) {
-    try {
-      await cache.put(url, new Response(data));
-    } catch {
-      // Storage full: the model still runs, it will simply be downloaded again next time.
-    }
-  }
+  if (received !== size) throw new Error(`téléchargement de ${path} interrompu`);
   return data;
 }
 
-// At most three downloads at a time keeps the browser responsive and the progress bar smooth.
-async function downloadAll(onProgress) {
-  const cache = await openCache();
+// With a cache, the download streams to disk without ever being held whole in memory.
+async function downloadToCache(cache, path, size, onBytes) {
+  const url = `${MODEL_BASE}/${path}`;
+  let received = 0;
+  const counter = new TransformStream({
+    transform(chunk, controller) {
+      received += chunk.byteLength;
+      onBytes(chunk.byteLength);
+      controller.enqueue(chunk);
+    },
+  });
+  const response = await fetchChecked(path);
+  try {
+    await cache.put(url, new Response(response.body.pipeThrough(counter), { headers: { 'content-type': 'application/octet-stream' } }));
+  } catch (error) {
+    if (error?.name === 'QuotaExceededError') throw new Error('pas assez de place libre sur cet appareil pour garder le modèle (660 Mo)');
+    throw error;
+  }
+  if (received !== size) {
+    await cache.delete(url);
+    throw new Error(`téléchargement de ${path} interrompu`);
+  }
+}
+
+// Two downloads at a time: enough to fill the connection, little memory in flight.
+async function downloadAll(cache, onProgress) {
   const files = allFiles();
   const total = files.reduce((sum, [, size]) => sum + size, 0);
   let loaded = 0;
@@ -109,19 +120,29 @@ async function downloadAll(onProgress) {
     loaded += bytes;
     onProgress(Math.min(loaded, total), total);
   };
-  const results = new Map();
+  const memory = new Map();
   const queue = [...files];
-  await Promise.all(Array.from({ length: 3 }, async () => {
+  await Promise.all(Array.from({ length: 2 }, async () => {
     while (queue.length) {
-      const [path] = queue.shift();
-      results.set(path, await fetchFile(cache, path, report));
+      const [path, size] = queue.shift();
+      if (cache && await cache.match(`${MODEL_BASE}/${path}`)) report(size);
+      else if (cache) await downloadToCache(cache, path, size, report);
+      else memory.set(path, await downloadToMemory(path, size, report));
     }
   }));
-  return results;
+  // Read one file back, only when it is needed, so that a single graph is in memory at a time.
+  return async path => {
+    if (!cache) {
+      const data = memory.get(path);
+      memory.delete(path);
+      return data;
+    }
+    return new Uint8Array(await (await cache.match(`${MODEL_BASE}/${path}`)).arrayBuffer());
+  };
 }
 
 async function pickBackend(requested) {
-  if (requested === 'wasm') return 'wasm';
+  if (requested === 'wasm' || requested === 'webgpu') return requested;
   try {
     const adapter = self.navigator.gpu && await self.navigator.gpu.requestAdapter();
     // A software "graphics card" (SwiftShader, on machines without a usable GPU) is slower than the processor.
@@ -133,45 +154,52 @@ async function pickBackend(requested) {
   return 'wasm';
 }
 
-async function createSession(files, graph, executionProvider) {
-  const externalData = graph.chunks.map(([name]) => ({ path: name, data: files.get(`onnx/${name}`) }));
-  return ort.InferenceSession.create(files.get(graph.file), {
+// One graph at a time: read its files, build the session, then let the bytes go before the next graph.
+async function createSession(read, graph, executionProvider) {
+  const model = await read(graph.file);
+  const externalData = [];
+  for (const [name] of graph.chunks) externalData.push({ path: name, data: await read(`onnx/${name}`) });
+  return ort.InferenceSession.create(model, {
     executionProviders: [executionProvider],
     externalData,
     graphOptimizationLevel: 'all',
+    enableCpuMemArena: false, // the arena keeps its peak size forever; phones cannot afford it
+    extra: { session: { disable_prepacking: '1' } }, // no second, repacked copy of the weights on the processor
   });
 }
 
 async function importRuntime(name) {
   ort = await import(ORT_DIST + ORT_BUILDS[name]);
   ort.env.wasm.wasmPaths = ORT_DIST;
-  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, self.navigator.hardwareConcurrency || 1) : 1;
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, self.navigator.hardwareConcurrency || 1) : 1;
 }
 
 async function load(requestedBackend) {
-  const files = await downloadAll((loaded, total) => post({ type: 'loading', loaded, total }));
-  const decodeJson = path => JSON.parse(new TextDecoder().decode(files.get(path)));
-  tokenizer = new Tokenizer(decodeJson('tokenizer/tokenizer.json'), decodeJson('tokenizer/tokenizer_config.json'));
+  const cache = await openCache();
+  const read = await downloadAll(cache, (loaded, total) => post({ type: 'loading', loaded, total }));
+  tokenizer = await loadTokenizer(new URL('./tokenizer', import.meta.url).href);
 
   backend = await pickBackend(requestedBackend);
   post({ type: 'starting', backend });
-  // GPU resources must be created one graph at a time; doing it in parallel can exhaust GPU memory.
   const create = async executionProvider => {
     const created = {};
-    for (const [name, graph] of Object.entries(GRAPHS)) created[name] = await createSession(files, graph, executionProvider);
+    for (const [name, graph] of Object.entries(GRAPHS)) {
+      created[name] = await createSession(read, graph, executionProvider);
+      globalThis.gc?.(); // only exists when a test browser exposes it, to measure memory without pending garbage
+    }
     return created;
   };
   try {
     await importRuntime(backend);
     sessions = await create(backend);
   } catch (error) {
-    if (backend !== 'webgpu') throw error;
+    // Without a cache the files were handed over once and are gone: no second attempt on the processor.
+    if (backend !== 'webgpu' || !cache) throw error;
     backend = 'wasm';
     post({ type: 'starting', backend });
     await importRuntime(backend);
     sessions = await create(backend);
   }
-  files.clear();
   post({ type: 'ready', backend });
 }
 
@@ -213,13 +241,13 @@ function schedule(steps) {
   return t;
 }
 
-async function generate({ id, prompt, seconds, seed }) {
+async function generate({ id, prompt, seconds, seed, steps = STEPS }) {
   cancelRequested = false;
   const started = performance.now();
   seconds = Math.max(1, Math.min(MAX_SECONDS, seconds));
 
   // 1. Text: 256 tokens, padded on the right (the model learned its own padding embedding).
-  const ids = tokenizer.encode(prompt, { add_special_tokens: false }).ids.slice(0, TEXT_TOKENS);
+  const ids = tokenizer.encode(prompt).slice(0, TEXT_TOKENS);
   const inputIds = new BigInt64Array(TEXT_TOKENS);
   const attentionMask = new BigInt64Array(TEXT_TOKENS);
   ids.forEach((token, index) => {
@@ -255,8 +283,8 @@ async function generate({ id, prompt, seconds, seed }) {
   const size = LATENT_CHANNELS * frames;
   let x = new Float32Array(size);
   for (let i = 0; i < size; i++) x[i] = noise();
-  const t = schedule(STEPS);
-  for (let step = 0; step < STEPS; step++) {
+  const t = schedule(steps);
+  for (let step = 0; step < steps; step++) {
     if (cancelRequested) throw new Error('annulé');
     const output = await sessions.dit.run({
       x: new ort.Tensor('float32', x, [1, LATENT_CHANNELS, frames]),
@@ -276,7 +304,7 @@ async function generate({ id, prompt, seconds, seed }) {
       next[i] = tNext === 0 ? denoised : (1 - tNext) * denoised + tNext * noise();
     }
     x = next;
-    post({ type: 'progress', id, step: step + 1, steps: STEPS + 1 });
+    post({ type: 'progress', id, step: step + 1, steps: steps + 1 });
   }
 
   // 4. Decode to 44.1 kHz stereo and keep only the requested duration.
@@ -296,7 +324,7 @@ async function generate({ id, prompt, seconds, seed }) {
   });
   decoded.audio.dispose();
   for (const tensor of [text.last_hidden_state, duration.embedding]) tensor.dispose();
-  post({ type: 'progress', id, step: STEPS + 1, steps: STEPS + 1 });
+  post({ type: 'progress', id, step: steps + 1, steps: steps + 1 });
   post({
     type: 'done', id, left: channels[0], right: channels[1], sampleRate: SAMPLE_RATE,
     seconds: (performance.now() - started) / 1000,

@@ -7,4 +7,8 @@ Model used by this site: Stable Audio 3.0 Small Music (stabilityai/stable-audio-
 conversion published by lsb (huggingface.co/lsb/stable-audio-3-small-music-onnx). The weights are downloaded by the
 visitor's browser from Hugging Face; this repository does not redistribute or modify them.
 
+The Gemma tokenizer (tokenizer.json of the model above) is redistributed in static/engine/tokenizer/ in a compact
+binary form made by tools/compacter_tokenizer.py: the same single-character tokens, byte-fallback tokens, added
+tokens and merge rules, stored as numbers instead of JSON. It gives the same token ids as the original file.
+
 Full license texts: licences/STABILITY_AI_COMMUNITY_LICENSE.md and licences/GEMMA_TERMS_OF_USE.md.
